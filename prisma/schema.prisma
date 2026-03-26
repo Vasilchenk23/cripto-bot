@@ -1,0 +1,44 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+
+model Airdrop {
+  id          Int      @id @default(autoincrement())
+  name        String   
+  description String?  
+  link        String?  
+  status      String   @default("NEW") 
+  createdAt   DateTime @default(now())
+}
+
+model Note {
+  id        Int      @id @default(autoincrement())
+  text      String
+  link      String?
+  createdAt DateTime @default(now())
+}
+
+model Whale {
+  id           Int        @id @default(autoincrement())
+  address      String     @unique
+  name         String?
+  isActive     Boolean    @default(true)
+  createdAt    DateTime   @default(now())
+  transactions WhaleTx[]
+}
+
+model WhaleTx {
+  id        Int      @id @default(autoincrement())
+  signature String   @unique
+  tokenMint String
+  amount    Float
+  type      String  
+  timestamp DateTime @default(now())
+  whaleId   Int?
+  whale     Whale?   @relation(fields: [whaleId], references: [id])
+}

@@ -1,5 +1,6 @@
 generator client {
   provider = "prisma-client-js"
+  output   = "../node_modules/.prisma/client"
 }
 
 datasource db {
@@ -37,8 +38,37 @@ model WhaleTx {
   signature String   @unique
   tokenMint String
   amount    Float
-  type      String  
+  type      String   
   timestamp DateTime @default(now())
   whaleId   Int?
   whale     Whale?   @relation(fields: [whaleId], references: [id])
+}
+
+model User {
+  id             Int            @id @default(autoincrement())
+  telegramId     String         @unique
+  virtualBalance Float          @default(2000.0)
+  trades         VirtualTrade[]
+  createdAt      DateTime       @default(now())
+}
+
+model VirtualTrade {
+  id         Int      @id @default(autoincrement())
+  userId     Int
+  user       User     @relation(fields: [userId], references: [id])
+  tokenMint  String
+  symbol     String?
+  entryPrice Float
+  amountUAH  Float    @default(500.0)
+  timestamp  DateTime @default(now())
+  status     String   @default("OPEN") 
+  exitPrice  Float?
+  pnlUAH     Float?
+  pnlPercent Float?
+  closedAt   DateTime?
+  report15m  Boolean @default(false)
+  report1h   Boolean @default(false)
+  report4h   Boolean @default(false)
+  report12h  Boolean @default(false)
+  report24h  Boolean @default(false)
 }

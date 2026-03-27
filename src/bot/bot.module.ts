@@ -5,6 +5,7 @@ import { NewsModule } from '../news/news.module';
 import { AirdropsModule } from 'src/airdrops/airdrops.module';
 import { NotesModule } from 'src/notes/notes.module';
 import { WhalesModule } from 'src/whales/whales.module';
+import { TradingModule } from '../trading/trading.module';
 
 @Module({
   imports: [
@@ -13,6 +14,7 @@ import { WhalesModule } from 'src/whales/whales.module';
     AirdropsModule,
     NotesModule,
     WhalesModule,
+    TradingModule,
   ],
   providers: [BotService],
 })

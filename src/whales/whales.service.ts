@@ -196,8 +196,7 @@ export class WhalesService {
         );
         alerts.push(...whaleAlerts);
       } catch (error: unknown) {
-        const message =
-          error instanceof Error ? error.message : String(error);
+        const message = error instanceof Error ? error.message : String(error);
         this.logger.error(`Error tracking ${whale.address}: ${message}`);
       }
     }
@@ -221,9 +220,7 @@ export class WhalesService {
     }
 
     const lastSig = signatures[0];
-    this.logger.log(
-      `${name}: Latest sig ${lastSig.signature.slice(0, 12)}...`,
-    );
+    this.logger.log(`${name}: Latest sig ${lastSig.signature.slice(0, 12)}...`);
 
     const exists = await this.prisma.whaleTx.findUnique({
       where: { signature: lastSig.signature },
@@ -237,7 +234,13 @@ export class WhalesService {
 
     if (!tx?.meta) return [];
 
-    return this.analyzeTransaction(tx, whaleId, address, name, lastSig.signature);
+    return this.analyzeTransaction(
+      tx,
+      whaleId,
+      address,
+      name,
+      lastSig.signature,
+    );
   }
 
   private async analyzeTransaction(
@@ -251,38 +254,53 @@ export class WhalesService {
     const postBalances: TokenBalance[] = tx.meta?.postTokenBalances ?? [];
     const alerts: WhaleAlert[] = [];
 
-    for (const postBal of postBalances) {
-      if (postBal.owner !== address) continue;
+    const mints = new Set([
+      ...preBalances.filter((b) => b.owner === address).map((b) => b.mint),
+      ...postBalances.filter((b) => b.owner === address).map((b) => b.mint),
+    ]);
 
+    for (const mint of mints) {
       const preBal = preBalances.find(
-        (p) => p.owner === address && p.mint === postBal.mint,
+        (p) => p.owner === address && p.mint === mint,
+      );
+      const postBal = postBalances.find(
+        (p) => p.owner === address && p.mint === mint,
       );
 
       const preAmount = preBal?.uiTokenAmount?.uiAmount ?? 0;
-      const postAmount = postBal.uiTokenAmount?.uiAmount ?? 0;
+      const postAmount = postBal?.uiTokenAmount?.uiAmount ?? 0;
       const delta = postAmount - preAmount;
 
-      if (delta <= WhalesService.MIN_TOKEN_AMOUNT) continue;
+      if (Math.abs(delta) <= WhalesService.MIN_TOKEN_AMOUNT) continue;
 
-      this.logger.warn(`[SIGNAL] ${name} bought ${postBal.mint} (+${delta})`);
+      const type = delta > 0 ? 'BUY' : 'SELL';
+      const absDelta = Math.abs(delta);
+
+      this.logger.warn(
+        `[SIGNAL] ${name} ${type.toLowerCase()} ${mint} (${delta > 0 ? '+' : ''}${delta.toFixed(6)})`,
+      );
 
       await this.prisma.whaleTx.create({
         data: {
           signature,
-          tokenMint: postBal.mint,
-          amount: delta,
-          type: 'BUY',
+          tokenMint: mint,
+          amount: absDelta,
+          type,
           whaleId,
         },
       });
 
       const tradesLast24h = await this.getTradesLast24h(whaleId);
+      const metadata = await this.getTokenMetadata(mint);
 
       alerts.push({
         whaleName: name,
         whaleAddress: address,
-        tokenMint: postBal.mint,
-        amount: delta,
+        tokenMint: mint,
+        tokenSymbol: metadata?.symbol,
+        amount: absDelta,
+        amountUSD: metadata ? absDelta * metadata.priceUsd : undefined,
+        type,
         signature,
         tradesLast24h,
       });
@@ -291,6 +309,29 @@ export class WhalesService {
     }
 
     return alerts;
+  }
+
+  public async getTokenMetadata(
+    mint: string,
+  ): Promise<{ symbol: string; priceUsd: number } | null> {
+    try {
+      const { data } = await axios.get(
+        `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+      );
+      if (data.pairs && data.pairs.length > 0) {
+        const pair = data.pairs[0];
+        return {
+          symbol: pair.baseToken.symbol,
+          priceUsd: parseFloat(pair.priceUsd),
+        };
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      this.logger.error(
+        `Error fetching DexScreener data for ${mint}: ${message}`,
+      );
+    }
+    return null;
   }
 
   private async rpcCall<T>(method: string, params: unknown[]): Promise<T> {

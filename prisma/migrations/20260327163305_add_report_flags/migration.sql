@@ -1,0 +1,6 @@
+-- AlterTable
+ALTER TABLE "VirtualTrade" ADD COLUMN     "report12h" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "report15m" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "report1h" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "report24h" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN     "report4h" BOOLEAN NOT NULL DEFAULT false;

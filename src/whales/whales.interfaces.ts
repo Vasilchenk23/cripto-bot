@@ -51,7 +51,10 @@ export interface WhaleAlert {
   whaleName: string;
   whaleAddress: string;
   tokenMint: string;
+  tokenSymbol?: string;
   amount: number;
+  amountUSD?: number;
+  type: 'BUY' | 'SELL';
   signature: string;
   tradesLast24h: number;
 }

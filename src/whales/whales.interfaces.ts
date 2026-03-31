@@ -57,6 +57,12 @@ export interface WhaleAlert {
   type: 'BUY' | 'SELL';
   signature: string;
   tradesLast24h: number;
+  isFatWhale?: boolean;
+  tokenAge?: string;
+  tokenAgeMin?: number;
+  txId?: number;
+  preAmount?: number;
+  postAmount?: number;
 }
 
 export interface WhaleStats {

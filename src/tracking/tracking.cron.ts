@@ -27,40 +27,64 @@ export class TrackingCron {
     const openTrades = await this.tradingService.getOpenTrades();
     if (openTrades.length === 0) return;
 
-    const now = Date.now();
-
     for (const trade of openTrades) {
-      const elapsedMs = now - trade.timestamp.getTime();
-      const elapsedMin = elapsedMs / (60 * 1000);
+      try {
+        const metadata = await (this.whalesService as any).getTokenMetadata(trade.tokenMint);
+        if (!metadata) continue;
 
-      const intervals = [
-        { key: 'report15m', min: 15, label: '15m' },
-        { key: 'report1h', min: 60, label: '1h' },
-        { key: 'report4h', min: 240, label: '4h' },
-        { key: 'report12h', min: 720, label: '12h' },
-        { key: 'report24h', min: 1440, label: '24h' },
-      ];
+        const currentPrice = metadata.priceUsd;
+        const pnlPercent = ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
 
-      for (const interval of intervals) {
-        if (
-          elapsedMin >= interval.min &&
-          !trade[interval.key as keyof typeof trade]
-        ) {
-          await this.sendPnLReport(trade, interval.label, interval.key);
-          break;
+        // Auto-Stop-Loss: -25%
+        if (pnlPercent <= -25) {
+          this.logger.warn(`[STOP-LOSS] Token ${trade.tokenMint} hit -25%. Closing position.`);
+          const result = await this.tradingService.closeTrade(
+            trade.user.telegramId,
+            trade.tokenMint,
+            currentPrice,
+          );
+
+          const text = [
+            `🚨 <b>AUTO-STOP-LOSS TRIGGERED (-25%)</b>`,
+            `💎 Token: ${trade.symbol || trade.tokenMint.slice(0, 8)}...`,
+            '━━━━━━━━━━━━━━━',
+            `📊 Результат: <b>${result.pnlPercent?.toFixed(2)}%</b> (<b>${result.pnlUAH?.toFixed(2)} грн</b>)`,
+            `💰 Текущий баланс: <b>${(await this.tradingService.getOrCreateUser(trade.user.telegramId)).virtualBalance.toFixed(2)} грн</b>`,
+          ].join('\n');
+
+          await this.bot.api.sendMessage(trade.user.telegramId, text, { parse_mode: 'HTML' });
+          continue;
         }
+
+        const now = Date.now();
+        const elapsedMs = now - trade.timestamp.getTime();
+        const elapsedMin = elapsedMs / (60 * 1000);
+
+        const intervals = [
+          { key: 'report15m', min: 15, label: '15m' },
+          { key: 'report1h', min: 60, label: '1h' },
+          { key: 'report4h', min: 240, label: '4h' },
+          { key: 'report12h', min: 720, label: '12h' },
+          { key: 'report24h', min: 1440, label: '24h' },
+        ];
+
+        for (const interval of intervals) {
+          if (
+            elapsedMin >= interval.min &&
+            !trade[interval.key as keyof typeof trade]
+          ) {
+            await this.sendPnLReport(trade, interval.label, interval.key, metadata);
+            break;
+          }
+        }
+      } catch (error) {
+        this.logger.error(`Error processing trade ${trade.id}: ${error.message}`);
       }
     }
   }
 
-  private async sendPnLReport(trade: any, label: string, key: string) {
+  private async sendPnLReport(trade: any, label: string, key: string, metadata: any) {
     try {
-      // Fetch current price
-      const metadata = await (this.whalesService as any).getTokenMetadata(
-        trade.tokenMint,
-      );
-      if (!metadata) return;
-
       const currentPrice = metadata.priceUsd;
       const pnlPercent =
         ((currentPrice - trade.entryPrice) / trade.entryPrice) * 100;
@@ -79,7 +103,7 @@ export class TrackingCron {
         '━━━━━━━━━━━━━━━',
       ].join('\n');
 
-      await this.bot.api.sendMessage(this.myTelegramId, text, {
+      await this.bot.api.sendMessage(trade.user.telegramId, text, {
         parse_mode: 'HTML',
       });
 

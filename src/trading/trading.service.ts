@@ -6,8 +6,8 @@ export class TradingService {
   private readonly logger = new Logger(TradingService.name);
   private readonly prisma = new PrismaClient();
 
-  private static readonly INITIAL_BALANCE = 2000.0;
-  private static readonly TRADE_AMOUNT_UAH = 500.0;
+  private static readonly INITIAL_BALANCE = 3000.0;
+  private static readonly DEFAULT_TRADE_AMOUNT = 750.0;
 
   async getOrCreateUser(telegramId: string): Promise<User> {
     const user = await this.prisma.user.findUnique({
@@ -24,18 +24,37 @@ export class TradingService {
     });
   }
 
+  async toggleAutoPilot(telegramId: string): Promise<{ enabled: boolean }> {
+    const user = await this.getOrCreateUser(telegramId);
+    const updated = await this.prisma.user.update({
+      where: { id: user.id },
+      data: { autoPilotEnabled: !(user as any).autoPilotEnabled },
+    });
+    return { enabled: (updated as any).autoPilotEnabled };
+  }
+
+  async getOpenTradesCount(telegramId: string): Promise<number> {
+    return this.prisma.virtualTrade.count({
+      where: {
+        user: { telegramId },
+        status: 'OPEN',
+      },
+    });
+  }
+
   async enterTrade(
     telegramId: string,
     tokenMint: string,
     symbol: string | undefined,
     entryPrice: number,
+    amountUAH: number = TradingService.DEFAULT_TRADE_AMOUNT,
   ): Promise<{ success: boolean; message: string }> {
     const user = await this.getOrCreateUser(telegramId);
 
-    if (user.virtualBalance < TradingService.TRADE_AMOUNT_UAH) {
+    if (user.virtualBalance < amountUAH) {
       return {
         success: false,
-        message: 'Insufficient virtual balance (need 500 UAH).',
+        message: `Insufficient virtual balance (need ${amountUAH} UAH).`,
       };
     }
 
@@ -61,21 +80,71 @@ export class TradingService {
           tokenMint,
           symbol,
           entryPrice,
-          amountUAH: TradingService.TRADE_AMOUNT_UAH,
+          amountUAH,
           status: 'OPEN',
         },
       }),
       this.prisma.user.update({
         where: { id: user.id },
         data: {
-          virtualBalance: { decrement: TradingService.TRADE_AMOUNT_UAH },
+          virtualBalance: { decrement: amountUAH },
         },
       }),
     ]);
 
     return {
       success: true,
-      message: 'Virtual position opened successfully (500 UAH)!',
+      message: `Virtual position opened successfully (${amountUAH} UAH)!`,
+    };
+  }
+
+  async addToPosition(
+    telegramId: string,
+    tokenMint: string,
+    price: number,
+    amountUAH: number = 500.0,
+  ): Promise<{ success: boolean; message: string; newAmount?: number }> {
+    const user = await this.getOrCreateUser(telegramId);
+
+    if (user.virtualBalance < amountUAH) {
+      return {
+        success: false,
+        message: `Insufficient balance for add-on (${amountUAH} UAH).`,
+      };
+    }
+
+    const trade = await this.prisma.virtualTrade.findFirst({
+      where: { userId: user.id, tokenMint, status: 'OPEN' },
+    });
+
+    if (!trade) {
+      return { success: false, message: 'No open position to add to.' };
+    }
+
+    const totalAmount = trade.amountUAH + amountUAH;
+    const newEntryPrice =
+      (trade.amountUAH * trade.entryPrice + amountUAH * price) / totalAmount;
+
+    await this.prisma.$transaction([
+      this.prisma.virtualTrade.update({
+        where: { id: trade.id },
+        data: {
+          amountUAH: totalAmount,
+          entryPrice: newEntryPrice,
+        },
+      }),
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          virtualBalance: { decrement: amountUAH },
+        },
+      }),
+    ]);
+
+    return {
+      success: true,
+      message: `Added ${amountUAH} UAH to ${trade.symbol || 'token'}. Total: ${totalAmount} UAH.`,
+      newAmount: totalAmount,
     };
   }
 

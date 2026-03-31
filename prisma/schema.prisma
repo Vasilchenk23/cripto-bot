@@ -37,6 +37,8 @@ model WhaleTx {
   signature String   @unique
   tokenMint String
   amount    Float
+  amountUSD Float?
+  priceAtTx Float?
   type      String   
   timestamp DateTime @default(now())
   whaleId   Int?
@@ -44,11 +46,12 @@ model WhaleTx {
 }
 
 model User {
-  id             Int            @id @default(autoincrement())
-  telegramId     String         @unique
-  virtualBalance Float          @default(2000.0)
-  trades         VirtualTrade[]
-  createdAt      DateTime       @default(now())
+  id               Int            @id @default(autoincrement())
+  telegramId       String         @unique
+  virtualBalance   Float          @default(3000.0)
+  autoPilotEnabled Boolean        @default(false)
+  trades           VirtualTrade[]
+  createdAt        DateTime       @default(now())
 }
 
 model VirtualTrade {

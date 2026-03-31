@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
 import axios, { AxiosInstance } from 'axios';
+import { Subject } from 'rxjs';
 import {
   RpcResponse,
   SignatureInfo,
@@ -22,6 +23,7 @@ export class WhalesService {
   private readonly prisma = new PrismaClient();
   private readonly http: AxiosInstance;
   private readonly rpcUrl: string;
+  public readonly alert$ = new Subject<WhaleAlert>();
 
   private static readonly MIN_TOKEN_AMOUNT = 1e-6;
   private static readonly SIGNATURE_LIMIT = 5;
@@ -243,6 +245,71 @@ export class WhalesService {
     );
   }
 
+  private static readonly STABLECOINS = [
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+    'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC', // USDT
+  ];
+
+  private static readonly MIN_BUY_USD = 1000;
+  private static readonly FAT_WHALE_USD = 5000;
+
+  // ... (isValidSolanaAddress, addWhale, getActiveWhales remains the same)
+
+  public async handleRealTimeTransaction(result: any) {
+    const signature = result.signature;
+    const meta = result.transaction?.meta || result.meta;
+    const slot = result.slot;
+    const txData = result.transaction?.transaction || result.transaction;
+
+    if (!txData || !meta) {
+      this.logger.error(`[WS] Incomplete transaction data for ${signature}`);
+      return;
+    }
+
+    const accountKeys = txData.message?.accountKeys || [];
+    if (accountKeys.length === 0) {
+      this.logger.error(`[WS] No account keys found for ${signature}`);
+      return;
+    }
+
+    this.logger.log(`Analyzing real-time transaction: ${signature}`);
+
+    // Extract addresses from accountKeys (could be strings or objects)
+    const addresses = accountKeys.map((k: any) => typeof k === 'string' ? k : k.pubkey);
+
+    // Find the whale in our DB
+    const whale = await this.prisma.whale.findFirst({
+      where: {
+        address: { in: addresses },
+        isActive: true,
+      },
+    });
+
+    if (!whale) return;
+
+    const exists = await this.prisma.whaleTx.findUnique({
+      where: { signature },
+    });
+    if (exists) return;
+
+    const alerts = await this.analyzeTransaction(
+      { meta, slot, blockTime: Date.now() / 1000 },
+      whale.id,
+      whale.address,
+      whale.name ?? 'Unknown',
+      signature,
+    );
+
+    if (alerts.length > 0) {
+      // Note: We need a way to notify BotService.
+      // We can use an EventEmitter or just wait for BotService to call trackWhales (polling)
+      // but the goal is real-time. We'll use a simple callback or event emitter later.
+      this.logger.log(`Real-time alerts generated: ${alerts.length}`);
+      // For now, these alerts will be returned if trackWhales is called, 
+      // but we need them to be pushed.
+    }
+  }
+
   private async analyzeTransaction(
     tx: TransactionResult,
     whaleId: number,
@@ -260,6 +327,9 @@ export class WhalesService {
     ]);
 
     for (const mint of mints) {
+      // Filter out stablecoins
+      if (WhalesService.STABLECOINS.includes(mint)) continue;
+
       const preBal = preBalances.find(
         (p) => p.owner === address && p.mint === mint,
       );
@@ -276,34 +346,57 @@ export class WhalesService {
       const type = delta > 0 ? 'BUY' : 'SELL';
       const absDelta = Math.abs(delta);
 
+      const metadata = await this.getTokenMetadata(mint);
+      if (!metadata) continue;
+
+      const amountUSD = absDelta * metadata.priceUsd;
+
+      // Filter: Min buy $1,000
+      if (type === 'BUY' && amountUSD < WhalesService.MIN_BUY_USD) {
+        this.logger.debug(`Skipping small buy: $${amountUSD.toFixed(2)}`);
+        continue;
+      }
+
+      const isFatWhale = amountUSD >= WhalesService.FAT_WHALE_USD;
+
       this.logger.warn(
-        `[SIGNAL] ${name} ${type.toLowerCase()} ${mint} (${delta > 0 ? '+' : ''}${delta.toFixed(6)})`,
+        `[SIGNAL] ${name} ${type.toLowerCase()} ${mint} (${delta > 0 ? '+' : ''}${delta.toFixed(6)}) - $${amountUSD.toFixed(2)}`,
       );
 
-      await this.prisma.whaleTx.create({
+      const txRecord = await this.prisma.whaleTx.create({
         data: {
           signature,
           tokenMint: mint,
           amount: absDelta,
+          amountUSD: amountUSD,
+          priceAtTx: metadata.priceUsd,
           type,
           whaleId,
         },
       });
 
       const tradesLast24h = await this.getTradesLast24h(whaleId);
-      const metadata = await this.getTokenMetadata(mint);
 
-      alerts.push({
+      const alert: WhaleAlert = {
         whaleName: name,
         whaleAddress: address,
         tokenMint: mint,
-        tokenSymbol: metadata?.symbol,
+        tokenSymbol: metadata.symbol,
         amount: absDelta,
-        amountUSD: metadata ? absDelta * metadata.priceUsd : undefined,
+        amountUSD: amountUSD,
         type,
         signature,
         tradesLast24h,
-      });
+        isFatWhale,
+        tokenAge: metadata.tokenAge,
+        tokenAgeMin: metadata.tokenAgeMin,
+        txId: txRecord.id,
+        preAmount,
+        postAmount,
+      };
+
+      alerts.push(alert);
+      this.alert$.next(alert);
 
       break;
     }
@@ -313,16 +406,33 @@ export class WhalesService {
 
   public async getTokenMetadata(
     mint: string,
-  ): Promise<{ symbol: string; priceUsd: number } | null> {
+  ): Promise<{ symbol: string; priceUsd: number; tokenAge?: string; tokenAgeMin?: number } | null> {
     try {
       const { data } = await axios.get(
         `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
       );
       if (data.pairs && data.pairs.length > 0) {
         const pair = data.pairs[0];
+        const createdAt = pair.pairCreatedAt;
+        let tokenAge = 'Unknown';
+        let tokenAgeMin = 0;
+        
+        if (createdAt) {
+          const ageMs = Date.now() - createdAt;
+          tokenAgeMin = Math.floor(ageMs / (60 * 1000));
+          const ageHours = Math.floor(tokenAgeMin / 60);
+          const ageDays = Math.floor(ageHours / 24);
+          
+          if (ageDays > 0) tokenAge = `${ageDays}d`;
+          else if (ageHours > 0) tokenAge = `${ageHours}h`;
+          else tokenAge = `${tokenAgeMin}m`;
+        }
+
         return {
           symbol: pair.baseToken.symbol,
           priceUsd: parseFloat(pair.priceUsd),
+          tokenAge,
+          tokenAgeMin,
         };
       }
     } catch (error: unknown) {

@@ -1,0 +1,3 @@
+-- AlterTable
+ALTER TABLE "WhaleTx" ADD COLUMN     "amountUSD" DOUBLE PRECISION,
+ADD COLUMN     "priceAtTx" DOUBLE PRECISION;

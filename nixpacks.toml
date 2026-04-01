@@ -2,8 +2,7 @@
     NODE_VERSION = "20"
 
 [phases.setup]
-    nixPkgs = ["nodejs", "openssl"]
-    cmds = ["npm install -g pnpm"]
+    nixPkgs = ["nodejs", "openssl", "pnpm"]
 
 [phases.build]
     cmds = ["pnpm install --frozen-lockfile", "pnpm run build"]

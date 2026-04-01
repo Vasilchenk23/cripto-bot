@@ -23,6 +23,8 @@ export class WhalesService {
   private readonly prisma = new PrismaClient();
   private readonly http: AxiosInstance;
   private readonly rpcUrl: string;
+
+  private whaleMaxPositions: Map<string, number> = new Map();
   public readonly alert$ = new Subject<WhaleAlert>();
 
   private static readonly MIN_TOKEN_AMOUNT = 1e-6;
@@ -246,14 +248,13 @@ export class WhalesService {
   }
 
   private static readonly STABLECOINS = [
-    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-    'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC', // USDT
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
+    'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC', 
   ];
 
   private static readonly MIN_BUY_USD = 1000;
   private static readonly FAT_WHALE_USD = 5000;
 
-  // ... (isValidSolanaAddress, addWhale, getActiveWhales remains the same)
 
   public async handleRealTimeTransaction(result: any) {
     const signature = result.signature;
@@ -274,10 +275,8 @@ export class WhalesService {
 
     this.logger.log(`Analyzing real-time transaction: ${signature}`);
 
-    // Extract addresses from accountKeys (could be strings or objects)
     const addresses = accountKeys.map((k: any) => typeof k === 'string' ? k : k.pubkey);
 
-    // Find the whale in our DB
     const whale = await this.prisma.whale.findFirst({
       where: {
         address: { in: addresses },
@@ -301,12 +300,7 @@ export class WhalesService {
     );
 
     if (alerts.length > 0) {
-      // Note: We need a way to notify BotService.
-      // We can use an EventEmitter or just wait for BotService to call trackWhales (polling)
-      // but the goal is real-time. We'll use a simple callback or event emitter later.
       this.logger.log(`Real-time alerts generated: ${alerts.length}`);
-      // For now, these alerts will be returned if trackWhales is called, 
-      // but we need them to be pushed.
     }
   }
 
@@ -327,7 +321,6 @@ export class WhalesService {
     ]);
 
     for (const mint of mints) {
-      // Filter out stablecoins
       if (WhalesService.STABLECOINS.includes(mint)) continue;
 
       const preBal = preBalances.find(
@@ -351,7 +344,6 @@ export class WhalesService {
 
       const amountUSD = absDelta * metadata.priceUsd;
 
-      // Filter: Min buy $1,000
       if (type === 'BUY' && amountUSD < WhalesService.MIN_BUY_USD) {
         this.logger.debug(`Skipping small buy: $${amountUSD.toFixed(2)}`);
         continue;
@@ -377,13 +369,24 @@ export class WhalesService {
 
       const tradesLast24h = await this.getTradesLast24h(whaleId);
 
+      const currentPositionUSD = postAmount * metadata.priceUsd;
+      const posKey = `${address}:${mint}`;
+      if (type === 'BUY') {
+        const prevMax = this.whaleMaxPositions.get(posKey) || 0;
+        if (currentPositionUSD > prevMax) {
+          this.whaleMaxPositions.set(posKey, currentPositionUSD);
+        }
+      }
+      const maxPositionUSD =
+        this.whaleMaxPositions.get(posKey) || currentPositionUSD;
+
       const alert: WhaleAlert = {
         whaleName: name,
         whaleAddress: address,
         tokenMint: mint,
         tokenSymbol: metadata.symbol,
         amount: absDelta,
-        amountUSD: amountUSD,
+        amountUSD,
         type,
         signature,
         tradesLast24h,
@@ -393,6 +396,7 @@ export class WhalesService {
         txId: txRecord.id,
         preAmount,
         postAmount,
+        maxPositionUSD,
       };
 
       alerts.push(alert);
@@ -406,7 +410,12 @@ export class WhalesService {
 
   public async getTokenMetadata(
     mint: string,
-  ): Promise<{ symbol: string; priceUsd: number; tokenAge?: string; tokenAgeMin?: number } | null> {
+  ): Promise<{
+    symbol: string;
+    priceUsd: number;
+    tokenAge?: string;
+    tokenAgeMin?: number;
+  } | null> {
     try {
       const { data } = await axios.get(
         `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
@@ -416,13 +425,13 @@ export class WhalesService {
         const createdAt = pair.pairCreatedAt;
         let tokenAge = 'Unknown';
         let tokenAgeMin = 0;
-        
+
         if (createdAt) {
           const ageMs = Date.now() - createdAt;
           tokenAgeMin = Math.floor(ageMs / (60 * 1000));
           const ageHours = Math.floor(tokenAgeMin / 60);
           const ageDays = Math.floor(ageHours / 24);
-          
+
           if (ageDays > 0) tokenAge = `${ageDays}d`;
           else if (ageHours > 0) tokenAge = `${ageHours}h`;
           else tokenAge = `${tokenAgeMin}m`;
@@ -437,9 +446,29 @@ export class WhalesService {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.error(
-        `Error fetching DexScreener data for ${mint}: ${message}`,
+      this.logger.warn(
+        `DexScreener failed for ${mint}: ${message}. Switching to Jupiter.`,
       );
+
+      try {
+        const { data: jupData } = await axios.get(
+          `https://api.jup.ag/price/v2?ids=${mint}`,
+        );
+        if (jupData.data && jupData.data[mint]) {
+          const jupPrice = parseFloat(jupData.data[mint].price);
+          this.logger.log(
+            `[PRICE_SERVICE] DexScreener failed, switching to Jupiter. Price for ${mint}: ${jupPrice} USD.`,
+          );
+          return {
+            symbol: 'UNKNOWN', 
+            priceUsd: jupPrice,
+            tokenAge: 'Unknown',
+            tokenAgeMin: 0,
+          };
+        }
+      } catch (jupError: unknown) {
+        this.logger.error(`Jupiter API also failed for ${mint}`);
+      }
     }
     return null;
   }

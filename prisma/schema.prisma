@@ -48,7 +48,7 @@ model WhaleTx {
 model User {
   id               Int            @id @default(autoincrement())
   telegramId       String         @unique
-  virtualBalance   Float          @default(3000.0)
+  virtualBalance   Float          @default(3500.0)
   autoPilotEnabled Boolean        @default(false)
   trades           VirtualTrade[]
   createdAt        DateTime       @default(now())

@@ -1,13 +1,41 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { PrismaClient, User, VirtualTrade } from '@prisma/client';
 
 @Injectable()
-export class TradingService {
+export class TradingService implements OnModuleInit {
   private readonly logger = new Logger(TradingService.name);
   private readonly prisma = new PrismaClient();
 
-  private static readonly INITIAL_BALANCE = 3000.0;
+  private static readonly INITIAL_BALANCE = 3500.0;
   private static readonly DEFAULT_TRADE_AMOUNT = 750.0;
+  private static readonly MAX_TOTAL_POSITION_PER_TOKEN = 1500.0;
+
+  async onModuleInit() {
+    this.logger.log('🚀 [CLEAN_START] Initializing fresh state for production...');
+    try {
+      const users = await this.prisma.user.findMany();
+      for (const user of users) {
+        const closedCount = await this.prisma.virtualTrade.updateMany({
+          where: { userId: user.id, status: 'OPEN' },
+          data: { status: 'CLOSED', closedAt: new Date() },
+        });
+        await this.prisma.user.update({
+          where: { id: user.id },
+          data: { virtualBalance: TradingService.INITIAL_BALANCE },
+        });
+
+        if (closedCount.count > 0) {
+          this.logger.log(
+            `✅ [CLEAN_START] Reset user ${user.telegramId}: ${closedCount.count} trades closed, balance reset to ${TradingService.INITIAL_BALANCE} UAH.`,
+          );
+        }
+      }
+    } catch (error) {
+      this.logger.error(
+        `❌ [CLEAN_START] Error during initialization: ${error.message}`,
+      );
+    }
+  }
 
   async getOrCreateUser(telegramId: string): Promise<User> {
     const user = await this.prisma.user.findUnique({
@@ -58,6 +86,40 @@ export class TradingService {
       };
     }
 
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    const recentTrade = await this.prisma.virtualTrade.findFirst({
+      where: {
+        userId: user.id,
+        tokenMint,
+        status: 'CLOSED',
+        closedAt: { gte: twoHoursAgo },
+      },
+      orderBy: { closedAt: 'desc' },
+    });
+
+    if (recentTrade && recentTrade.closedAt) {
+      const cooldownRemaining = Math.ceil(
+        (recentTrade.closedAt.getTime() + 2 * 60 * 60 * 1000 - Date.now()) /
+          60000,
+      );
+      const lastTradeStr = recentTrade.closedAt.toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+      const currentStr = new Date().toLocaleTimeString('en-GB', {
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+      this.logger.log(
+        `[AUTO-PILOT] [SKIP] Token ${symbol || tokenMint} is on cooldown. Last trade: ${lastTradeStr}, Current time: ${currentStr}. Cooldown ends in ${cooldownRemaining}m.`,
+      );
+      return {
+        success: false,
+        message: `Token is on cooldown for ${cooldownRemaining}m.`,
+      };
+    }
+
     const existingTrade = await this.prisma.virtualTrade.findFirst({
       where: {
         userId: user.id,
@@ -92,6 +154,10 @@ export class TradingService {
       }),
     ]);
 
+    this.logger.log(
+      `[DB_CHECK] Trade saved: Token ${symbol || tokenMint}, Amount: ${amountUAH} UAH, Current User Balance: ${(user.virtualBalance - amountUAH).toFixed(2)} UAH.`,
+    );
+
     return {
       success: true,
       message: `Virtual position opened successfully (${amountUAH} UAH)!`,
@@ -122,6 +188,14 @@ export class TradingService {
     }
 
     const totalAmount = trade.amountUAH + amountUAH;
+
+    if (totalAmount > TradingService.MAX_TOTAL_POSITION_PER_TOKEN) {
+      return {
+        success: false,
+        message: `Diversification Limit: Max position per token is $${TradingService.MAX_TOTAL_POSITION_PER_TOKEN} UAH. Current: ${trade.amountUAH} UAH.`,
+      };
+    }
+
     const newEntryPrice =
       (trade.amountUAH * trade.entryPrice + amountUAH * price) / totalAmount;
 
@@ -240,11 +314,14 @@ export class TradingService {
       where: { userId: user.id, status: 'OPEN' },
     });
 
+    const totalPositionUAH = openTrades.reduce((sum, t) => sum + t.amountUAH, 0);
+    const totalNetWorth = user.virtualBalance + totalPositionUAH;
+
     return {
       virtualBalance: user.virtualBalance,
       openTrades,
-      totalNetWorth: 0,
-      totalPnLUAH: 0,
+      totalNetWorth,
+      totalPnLUAH: 0, 
       totalPnLPercent: 0,
     };
   }

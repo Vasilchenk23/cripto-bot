@@ -63,6 +63,7 @@ export interface WhaleAlert {
   txId?: number;
   preAmount?: number;
   postAmount?: number;
+  maxPositionUSD?: number;
 }
 
 export interface WhaleStats {

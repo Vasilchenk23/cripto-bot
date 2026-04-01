@@ -505,54 +505,108 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
     for (const alert of alerts) {
       const isBuy = alert.type === 'BUY';
-      const tgId = this.myTelegramId; // Assuming single user for now as per TZ
+      const tgId = this.myTelegramId; 
 
-      // Silence Mode Implementation
-      if (!isBuy) {
-        const hasPosition = await this.tradingService.hasOpenPosition(tgId, alert.tokenMint);
-        if (!hasPosition) {
-          this.logger.debug(`[SILENCE] Ignoring whale sell alert for ${alert.tokenMint} (no position)`);
-          continue;
-        }
-      }
+      let shouldSendMsg = !isBuy; 
 
-      // Auto-Pilot Implementation
       const user = await this.tradingService.getOrCreateUser(tgId);
-      const lastEntry = this.cooldowns.get(alert.tokenMint) || 0;
-      const cooldownMs = Date.now() - lastEntry;
-      const cooldownActive = cooldownMs < 2 * 60 * 60 * 1000;
-      const hasOpenPos = await this.tradingService.hasOpenPosition(tgId, alert.tokenMint);
+      const isAutoPilot = (user as any).autoPilotEnabled;
 
-      if (isBuy && (user as any).autoPilotEnabled) {
-        const minAgeMet = (alert.tokenAgeMin || 0) >= 15;
-        const minAmountMet = (alert.amountUSD || 0) >= 1000;
-        
-        // Detailed SKIP logging
-        if (!minAgeMet) this.logger.log(`[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Age < 15m (${alert.tokenAge || '0m'})`);
-        if (!minAmountMet) this.logger.log(`[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Amount < $1,000 ($${alert.amountUSD?.toFixed(0) || 0})`);
-        if (cooldownActive) this.logger.log(`[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Cooldown active (${Math.floor(cooldownMs / 60000)}m ago)`);
-        if (hasOpenPos) this.logger.log(`[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Position already open`);
+      if (isBuy) {
+        if (!isAutoPilot) {
+          shouldSendMsg = true;
+        } else {
+          const lastEntry = this.cooldowns.get(alert.tokenMint) || 0;
+          const cooldownMs = Date.now() - lastEntry;
+          const cooldownActive = cooldownMs < 2 * 60 * 60 * 1000;
+          const hasOpenPos = await this.tradingService.hasOpenPosition(
+            tgId,
+            alert.tokenMint,
+          );
 
-        if (minAgeMet && minAmountMet && !cooldownActive && !hasOpenPos) {
-          // Balance Check
-          this.logger.log(`[AUTO-PILOT] [BALANCE_CHECK] Current balance: ${user.virtualBalance.toFixed(2)}. Required: 500. Status: ${user.virtualBalance >= 500 ? 'OK' : 'FAIL'}`);
+          const tokenAgeMin = alert.tokenAgeMin || 0;
+          const isHighRisk = tokenAgeMin < 5;
+          const minAgeMet = tokenAgeMin >= 15 || isHighRisk;
+          const minAmountMet = (alert.amountUSD || 0) >= 1000;
 
-          if (user.virtualBalance >= 500) {
-            const buyResult = await this.tradingService.enterTrade(tgId, alert.tokenMint, alert.tokenSymbol, (alert.amountUSD! / alert.amount), 500);
-            if (buyResult.success) {
-              this.cooldowns.set(alert.tokenMint, Date.now());
-              this.logger.log(`[AUTO-PILOT] [ENTRY] Initial buy for token ${alert.tokenMint}. Amount: 500 UAH. Reason: Whale bought $${alert.amountUSD?.toFixed(0)}`);
-              const session = this.autoPilotSessionTrades.get(tgId) || [];
-              session.push({ tokenMint: alert.tokenMint, timestamp: new Date() });
-              this.autoPilotSessionTrades.set(tgId, session);
-              
-              await this.bot.api.sendMessage(tgId, `🤖 <b>AUTO-PILOT [ENTRY]:</b> Entered trade for <code>${alert.tokenMint}</code> (500 UAH)`, { parse_mode: 'HTML' });
-            } else {
-              this.logger.error(`[AUTO-PILOT] [ERROR] Trade entry failed: ${buyResult.message}`);
+          if (!minAgeMet) {
+            this.logger.log(
+              `[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Age ${tokenAgeMin}m (needs <5m or >=15m)`,
+            );
+          }
+          if (!minAmountMet) {
+            this.logger.log(
+              `[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Amount < $1,000 ($${alert.amountUSD?.toFixed(0) || 0})`,
+            );
+          }
+          if (cooldownActive) {
+            this.logger.log(
+              `[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Cooldown active (${Math.floor(cooldownMs / 60000)}m ago)`,
+            );
+          }
+          if (hasOpenPos) {
+            this.logger.log(
+              `[AUTO-PILOT] [SKIP] ${alert.tokenMint} ignored. Reason: Position already open`,
+            );
+          }
+
+          if (minAgeMet && minAmountMet && !cooldownActive && !hasOpenPos) {
+            const entryAmount = isHighRisk ? 250 : 500;
+            if (isHighRisk) {
+              this.logger.warn(
+                `[HIGH_RISK] Token ${alert.tokenMint} is too young (${alert.tokenAge || '0m'}), reducing entry amount to 250 UAH.`,
+              );
+            }
+
+            this.logger.log(
+              `[AUTO-PILOT] [BALANCE_CHECK] Current balance: ${user.virtualBalance.toFixed(2)}. Required: ${entryAmount}. Status: ${user.virtualBalance >= entryAmount ? 'OK' : 'FAIL'}`,
+            );
+
+            if (user.virtualBalance >= entryAmount) {
+              const buyResult = await this.tradingService.enterTrade(
+                tgId,
+                alert.tokenMint,
+                alert.tokenSymbol,
+                alert.amountUSD! / alert.amount,
+                entryAmount,
+              );
+              if (buyResult.success) {
+                this.cooldowns.set(alert.tokenMint, Date.now());
+                this.logger.log(
+                  `[AUTO-PILOT] [ENTRY] Initial buy for token ${alert.tokenMint}. Amount: ${entryAmount} UAH. Reason: Whale bought $${alert.amountUSD?.toFixed(0)}`,
+                );
+                const session = this.autoPilotSessionTrades.get(tgId) || [];
+                session.push({
+                  tokenMint: alert.tokenMint,
+                  timestamp: new Date(),
+                });
+                this.autoPilotSessionTrades.set(tgId, session);
+
+                await this.bot.api.sendMessage(
+                  tgId,
+                  `🤖 <b>AUTO-PILOT [ENTRY]:</b> Entered trade for <code>${alert.tokenMint}</code> (${entryAmount} UAH)${isHighRisk ? ' [HIGH_RISK]' : ''}`,
+                  { parse_mode: 'HTML' },
+                );
+                shouldSendMsg = true;
+              } else {
+                this.logger.error(
+                  `[AUTO-PILOT] [ERROR] Trade entry failed: ${buyResult.message}`,
+                );
+              }
             }
           }
         }
       }
+
+      if (isBuy) {
+        const wasAddOn = await this.checkWhaleAddOn(alert);
+        if (wasAddOn) shouldSendMsg = true;
+      } else {
+        await this.handleFollowExit(alert);
+      }
+
+      if (!shouldSendMsg) continue;
+
       const typeEmoji = isBuy ? '🟢' : '🔴';
       const typeText = isBuy ? 'BOUGHT' : 'SOLD';
       const symbol = alert.tokenSymbol ? `<b>(${alert.tokenSymbol})</b>` : '';
@@ -586,15 +640,12 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       if (isBuy) {
         const price = alert.amountUSD && alert.amount ? alert.amountUSD / alert.amount : 0;
         
-        // Add-ON check
-        await this.checkWhaleAddOn(alert);
-
         keyboard.text('300 грн', `vb_${alert.txId}_300`);
         keyboard.text('750 грн', `vb_${alert.txId}_750`);
         keyboard.text('1500 грн', `vb_${alert.txId}_1500`);
         keyboard.row();
       } else {
-        // Follow-Exit Logic: If whale sells, auto-close our positions
+
         await this.handleFollowExit(alert);
 
         const hasPosition = await this.tradingService.hasOpenPosition(
@@ -622,8 +673,8 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async checkWhaleAddOn(alert: WhaleAlert) {
-    if (alert.type !== 'BUY') return;
+  private async checkWhaleAddOn(alert: WhaleAlert): Promise<boolean> {
+    if (alert.type !== 'BUY') return false;
 
     const tgId = this.myTelegramId;
     const user = await this.tradingService.getOrCreateUser(tgId);
@@ -633,7 +684,6 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     if (trade) {
       const usdAmount = alert.amountUSD ? `≈$${alert.amountUSD.toFixed(2)}` : '';
       
-      // Auto-Add-on Logic
       if ((user as any).autoPilotEnabled) {
         this.logger.log(`[AUTO-PILOT] [ADD-ON] Whale bought more! Checking balance for add-on...`);
         this.logger.log(`[AUTO-PILOT] [BALANCE_CHECK] Current balance: ${user.virtualBalance.toFixed(2)}. Required: 500. Status: ${user.virtualBalance >= 500 ? 'OK' : 'FAIL'}`);
@@ -645,14 +695,13 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
           if (result.success) {
             this.logger.log(`[AUTO-PILOT] [ADD-ON] Added 500 UAH to position ${alert.tokenMint}. New total: ${result.newAmount} UAH.`);
             await this.bot.api.sendMessage(tgId, `🤖 <b>AUTO-PILOT [ADD-ON]:</b> Whale bought more! Added 500 UAH to <code>${alert.tokenMint}</code>. New total: <b>${result.newAmount} UAH</b>`, { parse_mode: 'HTML' });
-            return;
+            return true;
           } else {
             this.logger.error(`[AUTO-PILOT] [ADD-ON] Error: ${result.message}`);
           }
         }
       }
 
-      // If not auto-pilot or failed, just notify
       const text = [
         `⚠️ <b>КИТ ДОКУПИЛ!</b>`,
         `💎 Token: <code>${alert.tokenMint}</code>`,
@@ -660,23 +709,28 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
       ].join('\n');
 
       await this.bot.api.sendMessage(tgId, text, { parse_mode: 'HTML' });
+      return true;
     }
+    return false;
   }
 
   private async handleFollowExit(alert: WhaleAlert) {
     if (alert.type !== 'SELL') return;
 
-    // Smart Exit: Only exit if whale sells > 50% of his position
-    const pre = alert.preAmount || 0;
-    const post = alert.postAmount || 0;
-    const soldPercent = pre > 0 ? ((pre - post) / pre) * 100 : 0;
+    const maxPos = alert.maxPositionUSD || 0;
+    const soldAmountUSD = alert.amountUSD || 0;
+    const soldPercent = maxPos > 0 ? (soldAmountUSD / maxPos) * 100 : 0;
 
-    if (soldPercent < 50 && post > 0) {
-      this.logger.log(`[EXIT_LOGIC] Whale sold ${soldPercent.toFixed(1)}% of position, keeping position (Threshold is 50%). Remaining: ${post.toFixed(2)}`);
+    if (soldPercent < 50) {
+      this.logger.log(
+        `[EXIT_LOGIC] Whale sold $${soldAmountUSD.toFixed(0)}. Total whale position: $${maxPos.toFixed(0)}. Sold %: ${soldPercent.toFixed(1)}%. Threshold 50% NOT REACHED. Keeping position.`,
+      );
       return;
     }
 
-    this.logger.log(`[EXIT_LOGIC] Whale sold ${soldPercent.toFixed(1)}% of position (post: ${post.toFixed(2)}), TRIGGERING AUTO-SELL.`);
+    this.logger.log(
+      `[EXIT_LOGIC] Whale sold $${soldAmountUSD.toFixed(0)} (${soldPercent.toFixed(1)}% of max position), TRIGGERING AUTO-SELL.`,
+    );
 
     const openTrades = await this.tradingService.getOpenTrades();
     const matchingTrades = openTrades.filter(t => t.tokenMint === alert.tokenMint);
@@ -689,12 +743,16 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         this.logger.log(`[AUTO-PILOT] [EXIT] Triggering auto-sell for ${trade.tokenMint}. Reason: Whale sold >50% (${soldPercent.toFixed(1)}%). PnL: ${result.pnlPercent?.toFixed(2)}% (${result.pnlUAH?.toFixed(2)} UAH).`);
       }
 
+      const pnlPerc = result.pnlPercent || 0;
+      const pnlUAH = result.pnlUAH || 0;
+      const pnlSign = pnlUAH >= 0 ? '+' : '';
+
       const text = [
         `🚨 <b>СДЕЛКА ЗАКРЫТА (FOLLOW-EXIT)</b>`,
         `💎 Token: ${trade.symbol || trade.tokenMint.slice(0, 8)}...`,
-        `👤 Reason: Whale dumps >50% of position (${soldPercent.toFixed(1)}%)`,
+        `👤 Reason: Whale dumps >50% of position (${soldPercent.toFixed(1)}% of max)`,
         '━━━━━━━━━━━━━━━',
-        `📊 Результат: <b>${result.pnlPercent?.toFixed(2)}%</b> (<b>${result.pnlUAH?.toFixed(2)} грн</b>)`,
+        `📊 Профит: <b>${pnlSign}${pnlPerc.toFixed(2)}%</b> (<b>${pnlSign}${pnlUAH.toFixed(2)} UAH</b>)`,
         `💰 Текущий баланс: <b>${(await this.tradingService.getOrCreateUser(trade.user.telegramId)).virtualBalance.toFixed(2)} грн</b>`,
       ].join('\n');
 

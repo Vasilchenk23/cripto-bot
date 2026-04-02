@@ -11,7 +11,9 @@ export class TradingService implements OnModuleInit {
   private static readonly MAX_TOTAL_POSITION_PER_TOKEN = 1500.0;
 
   async onModuleInit() {
-    this.logger.log('🚀 [CLEAN_START] Initializing fresh state for production...');
+    this.logger.log(
+      '🚀 [CLEAN_START] Initializing fresh state for production...',
+    );
     try {
       const users = await this.prisma.user.findMany();
       for (const user of users) {
@@ -19,14 +21,19 @@ export class TradingService implements OnModuleInit {
           where: { userId: user.id, status: 'OPEN' },
           data: { status: 'CLOSED', closedAt: new Date() },
         });
-        await this.prisma.user.update({
-          where: { id: user.id },
-          data: { virtualBalance: TradingService.INITIAL_BALANCE },
-        });
 
-        if (closedCount.count > 0) {
+        if (user.virtualBalance < TradingService.INITIAL_BALANCE) {
+          await this.prisma.user.update({
+            where: { id: user.id },
+            data: { virtualBalance: TradingService.INITIAL_BALANCE },
+          });
+
           this.logger.log(
-            `✅ [CLEAN_START] Reset user ${user.telegramId}: ${closedCount.count} trades closed, balance reset to ${TradingService.INITIAL_BALANCE} UAH.`,
+            `✅ [CLEAN_START] Reset user ${user.telegramId}: ${closedCount.count} trades closed, balance reset to ${TradingService.INITIAL_BALANCE} UAH (was ${user.virtualBalance.toFixed(2)}).`,
+          );
+        } else {
+          this.logger.log(
+            `📈 [CLEAN_START] User ${user.telegramId}: ${closedCount.count} trades closed, balance PRESERVED at ${user.virtualBalance.toFixed(2)} UAH.`,
           );
         }
       }
@@ -314,14 +321,17 @@ export class TradingService implements OnModuleInit {
       where: { userId: user.id, status: 'OPEN' },
     });
 
-    const totalPositionUAH = openTrades.reduce((sum, t) => sum + t.amountUAH, 0);
+    const totalPositionUAH = openTrades.reduce(
+      (sum, t) => sum + t.amountUAH,
+      0,
+    );
     const totalNetWorth = user.virtualBalance + totalPositionUAH;
 
     return {
       virtualBalance: user.virtualBalance,
       openTrades,
       totalNetWorth,
-      totalPnLUAH: 0, 
+      totalPnLUAH: 0,
       totalPnLPercent: 0,
     };
   }

@@ -5,7 +5,7 @@
     nixPkgs = ["nodejs", "openssl", "pnpm"]
 
 [phases.build]
-    cmds = ["pnpm install --frozen-lockfile", "pnpm run build"]
+    cmds = ["pnpm install", "pnpm run build"]
 
 [phases.start]
     cmd = "npx prisma migrate deploy && pnpm run start:prod"

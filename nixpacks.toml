@@ -8,4 +8,4 @@
     cmds = ["pnpm install", "pnpm run build"]
 
 [phases.start]
-    cmd = "npx prisma migrate deploy && pnpm run start:prod"
+    cmd = "npx prisma migrate status && npx prisma migrate deploy && pnpm run start:prod"

@@ -6,8 +6,8 @@ import { AppService } from './app.service';
 import { BotModule } from './bot/bot.module';
 import { MarketModule } from './market/market.module';
 import { NewsModule } from './news/news.module';
-import { TradingModule } from './trading/trading.module';
 import { TrackingModule } from './tracking/tracking.module';
+import { ObserverModule } from './observer/observer.module';
 
 @Module({
   imports: [
@@ -16,8 +16,8 @@ import { TrackingModule } from './tracking/tracking.module';
     BotModule,
     MarketModule,
     NewsModule,
-    TradingModule,
     TrackingModule,
+    ObserverModule,
   ],
   controllers: [AppController],
   providers: [AppService],

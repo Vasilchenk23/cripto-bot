@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { PrismaClient } from '@prisma/client';
 import axios, { AxiosInstance } from 'axios';
@@ -18,7 +18,7 @@ import {
 const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
 @Injectable()
-export class WhalesService {
+export class WhalesService implements OnModuleInit {
   private readonly logger = new Logger(WhalesService.name);
   private readonly prisma = new PrismaClient();
   private readonly http: AxiosInstance;
@@ -38,6 +38,35 @@ export class WhalesService {
       timeout: 15_000,
       headers: { 'Content-Type': 'application/json' },
     });
+  }
+
+  async onModuleInit() {
+    await this.seedWhales();
+  }
+
+  private async seedWhales() {
+    const raw = this.configService.get<string>('WHALE_ADDRESSES', '');
+    if (!raw) {
+      this.logger.warn('[SEED] WHALE_ADDRESSES not set in .env');
+      return;
+    }
+
+    const entries = raw.split(',').map((entry) => {
+      const colonIdx = entry.lastIndexOf(':');
+      if (colonIdx === -1) return null;
+      const name = entry.slice(0, colonIdx).trim();
+      const address = entry.slice(colonIdx + 1).trim();
+      return { name, address };
+    }).filter(Boolean) as { name: string; address: string }[];
+
+    for (const w of entries) {
+      await this.prisma.whale.upsert({
+        where: { address: w.address },
+        update: { name: w.name, isActive: true },
+        create: { address: w.address, name: w.name, isActive: true },
+      });
+    }
+    this.logger.log(`[SEED] Upserted ${entries.length} whales from .env`);
   }
 
   public isValidSolanaAddress(address: string): boolean {
@@ -189,8 +218,6 @@ export class WhalesService {
     });
     const alerts: WhaleAlert[] = [];
 
-    this.logger.log(`Checking ${whales.length} whales...`);
-
     for (const whale of whales) {
       try {
         const whaleAlerts = await this.processWhale(
@@ -218,13 +245,9 @@ export class WhalesService {
       [address, { limit: WhalesService.SIGNATURE_LIMIT }],
     );
 
-    if (!signatures || signatures.length === 0) {
-      this.logger.debug(`${name}: No recent activity`);
-      return [];
-    }
+    if (!signatures || signatures.length === 0) return [];
 
     const lastSig = signatures[0];
-    this.logger.log(`${name}: Latest sig ${lastSig.signature.slice(0, 12)}...`);
 
     const exists = await this.prisma.whaleTx.findUnique({
       where: { signature: lastSig.signature },
@@ -244,36 +267,29 @@ export class WhalesService {
       address,
       name,
       lastSig.signature,
+      Date.now(),
     );
   }
 
   private static readonly STABLECOINS = [
-    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', 
-    'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC', 
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC',
   ];
 
   private static readonly MIN_BUY_USD = 1000;
   private static readonly FAT_WHALE_USD = 5000;
 
-
   public async handleRealTimeTransaction(result: any) {
+    const signalReceivedAt = Date.now();
     const signature = result.signature;
     const meta = result.transaction?.meta || result.meta;
     const slot = result.slot;
     const txData = result.transaction?.transaction || result.transaction;
 
-    if (!txData || !meta) {
-      this.logger.error(`[WS] Incomplete transaction data for ${signature}`);
-      return;
-    }
+    if (!txData || !meta) return;
 
     const accountKeys = txData.message?.accountKeys || [];
-    if (accountKeys.length === 0) {
-      this.logger.error(`[WS] No account keys found for ${signature}`);
-      return;
-    }
-
-    this.logger.log(`Analyzing real-time transaction: ${signature}`);
+    if (accountKeys.length === 0) return;
 
     const addresses = accountKeys.map((k: any) => typeof k === 'string' ? k : k.pubkey);
 
@@ -291,17 +307,14 @@ export class WhalesService {
     });
     if (exists) return;
 
-    const alerts = await this.analyzeTransaction(
+    await this.analyzeTransaction(
       { meta, slot, blockTime: Date.now() / 1000 },
       whale.id,
       whale.address,
       whale.name ?? 'Unknown',
       signature,
+      signalReceivedAt,
     );
-
-    if (alerts.length > 0) {
-      this.logger.log(`Real-time alerts generated: ${alerts.length}`);
-    }
   }
 
   private async analyzeTransaction(
@@ -310,6 +323,7 @@ export class WhalesService {
     address: string,
     name: string,
     signature: string,
+    signalReceivedAt: number = Date.now(),
   ): Promise<WhaleAlert[]> {
     const preBalances: TokenBalance[] = tx.meta?.preTokenBalances ?? [];
     const postBalances: TokenBalance[] = tx.meta?.postTokenBalances ?? [];
@@ -344,23 +358,16 @@ export class WhalesService {
 
       const amountUSD = absDelta * metadata.priceUsd;
 
-      if (type === 'BUY' && amountUSD < WhalesService.MIN_BUY_USD) {
-        this.logger.debug(`Skipping small buy: $${amountUSD.toFixed(2)}`);
-        continue;
-      }
+      if (type === 'BUY' && amountUSD < WhalesService.MIN_BUY_USD) continue;
 
       const isFatWhale = amountUSD >= WhalesService.FAT_WHALE_USD;
-
-      this.logger.warn(
-        `[SIGNAL] ${name} ${type.toLowerCase()} ${mint} (${delta > 0 ? '+' : ''}${delta.toFixed(6)}) - $${amountUSD.toFixed(2)}`,
-      );
 
       const txRecord = await this.prisma.whaleTx.create({
         data: {
           signature,
           tokenMint: mint,
           amount: absDelta,
-          amountUSD: amountUSD,
+          amountUSD,
           priceAtTx: metadata.priceUsd,
           type,
           whaleId,
@@ -397,6 +404,7 @@ export class WhalesService {
         preAmount,
         postAmount,
         maxPositionUSD,
+        signalReceivedAt,
       };
 
       alerts.push(alert);
@@ -446,27 +454,21 @@ export class WhalesService {
       }
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : String(error);
-      this.logger.warn(
-        `DexScreener failed for ${mint}: ${message}. Switching to Jupiter.`,
-      );
+      this.logger.warn(`DexScreener failed for ${mint}: ${message}`);
 
       try {
         const { data: jupData } = await axios.get(
           `https://api.jup.ag/price/v2?ids=${mint}`,
         );
         if (jupData.data && jupData.data[mint]) {
-          const jupPrice = parseFloat(jupData.data[mint].price);
-          this.logger.log(
-            `[PRICE_SERVICE] DexScreener failed, switching to Jupiter. Price for ${mint}: ${jupPrice} USD.`,
-          );
           return {
-            symbol: 'UNKNOWN', 
-            priceUsd: jupPrice,
+            symbol: 'UNKNOWN',
+            priceUsd: parseFloat(jupData.data[mint].price),
             tokenAge: 'Unknown',
             tokenAgeMin: 0,
           };
         }
-      } catch (jupError: unknown) {
+      } catch {
         this.logger.error(`Jupiter API also failed for ${mint}`);
       }
     }

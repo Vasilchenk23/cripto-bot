@@ -64,6 +64,7 @@ export interface WhaleAlert {
   preAmount?: number;
   postAmount?: number;
   maxPositionUSD?: number;
+  signalReceivedAt: number;
 }
 
 export interface WhaleStats {

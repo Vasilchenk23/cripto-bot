@@ -32,8 +32,6 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
     if (this.isClosing) return;
 
     const wsUrl = `wss://mainnet.helius-rpc.com/?api-key=${this.apiKey}`;
-    this.logger.log(`Connecting to Helius WebSocket...`);
-    
     this.ws = new WebSocket(wsUrl);
 
     this.ws.on('open', () => {
@@ -57,7 +55,6 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
 
   private reconnect() {
     if (this.isClosing) return;
-    this.logger.log('Attempting to reconnect in 5 seconds...');
     this.reconnectTimeout = setTimeout(() => this.connect(), 5000);
   }
 
@@ -70,8 +67,7 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
 
   private async subscribeToAllWhales() {
     const whales = await this.whalesService.getActiveWhales();
-    this.logger.log(`Subscribing to ${whales.length} whales...`);
-    
+
     for (const whale of whales) {
       this.subscribeToAddress(whale.address);
     }
@@ -85,9 +81,7 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
       id: 1,
       method: 'transactionSubscribe',
       params: [
-        {
-          accountInclude: [address],
-        },
+        { accountInclude: [address] },
         {
           commitment: 'confirmed',
           encoding: 'jsonParsed',
@@ -103,14 +97,9 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
   private async handleMessage(data: WebSocket.Data) {
     try {
       const message = JSON.parse(data.toString());
-      
+
       if (message.method === 'transactionNotification' && message.params?.result) {
         const result = message.params.result;
-        const signature = result.signature;
-        
-        this.logger.log(`Received real-time transaction: ${signature}`);
-        
-        // Pass the full result to WhalesService
         await (this.whalesService as any).handleRealTimeTransaction(result);
       }
     } catch (error) {

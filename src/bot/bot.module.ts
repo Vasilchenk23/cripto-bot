@@ -1,21 +1,10 @@
 import { Module } from '@nestjs/common';
 import { BotService } from './bot.service';
-import { MarketModule } from '../market/market.module';
-import { NewsModule } from '../news/news.module';
-import { AirdropsModule } from 'src/airdrops/airdrops.module';
-import { NotesModule } from 'src/notes/notes.module';
-import { WhalesModule } from 'src/whales/whales.module';
-import { TradingModule } from '../trading/trading.module';
+import { WhalesModule } from '../whales/whales.module';
+import { ObserverModule } from '../observer/observer.module';
 
 @Module({
-  imports: [
-    MarketModule,
-    NewsModule,
-    AirdropsModule,
-    NotesModule,
-    WhalesModule,
-    TradingModule,
-  ],
+  imports: [WhalesModule, ObserverModule],
   providers: [BotService],
 })
 export class BotModule {}

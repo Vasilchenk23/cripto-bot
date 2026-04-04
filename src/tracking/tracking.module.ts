@@ -1,10 +1,9 @@
 import { Module } from '@nestjs/common';
 import { TrackingCron } from './tracking.cron';
-import { TradingModule } from '../trading/trading.module';
-import { WhalesModule } from '../whales/whales.module';
+import { ObserverModule } from '../observer/observer.module';
 
 @Module({
-  imports: [TradingModule, WhalesModule],
+  imports: [ObserverModule],
   providers: [TrackingCron],
 })
 export class TrackingModule {}

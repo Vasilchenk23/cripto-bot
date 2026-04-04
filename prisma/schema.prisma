@@ -9,10 +9,10 @@ datasource db {
 
 model Airdrop {
   id          Int      @id @default(autoincrement())
-  name        String   
-  description String?  
-  link        String?  
-  status      String   @default("NEW") 
+  name        String
+  description String?
+  link        String?
+  status      String   @default("NEW")
   createdAt   DateTime @default(now())
 }
 
@@ -24,12 +24,13 @@ model Note {
 }
 
 model Whale {
-  id           Int        @id @default(autoincrement())
-  address      String     @unique
-  name         String?
-  isActive     Boolean    @default(true)
-  createdAt    DateTime   @default(now())
-  transactions WhaleTx[]
+  id             Int             @id @default(autoincrement())
+  address        String          @unique
+  name           String?
+  isActive       Boolean         @default(true)
+  createdAt      DateTime        @default(now())
+  transactions   WhaleTx[]
+  observerTrades ObserverTrade[]
 }
 
 model WhaleTx {
@@ -39,38 +40,28 @@ model WhaleTx {
   amount    Float
   amountUSD Float?
   priceAtTx Float?
-  type      String   
+  type      String
   timestamp DateTime @default(now())
   whaleId   Int?
   whale     Whale?   @relation(fields: [whaleId], references: [id])
 }
 
-model User {
-  id               Int            @id @default(autoincrement())
-  telegramId       String         @unique
-  virtualBalance   Float          @default(3500.0)
-  autoPilotEnabled Boolean        @default(false)
-  trades           VirtualTrade[]
-  createdAt        DateTime       @default(now())
-}
-
-model VirtualTrade {
-  id         Int      @id @default(autoincrement())
-  userId     Int
-  user       User     @relation(fields: [userId], references: [id])
-  tokenMint  String
-  symbol     String?
-  entryPrice Float
-  amountUAH  Float    @default(500.0)
-  timestamp  DateTime @default(now())
-  status     String   @default("OPEN") 
-  exitPrice  Float?
-  pnlUAH     Float?
-  pnlPercent Float?
-  closedAt   DateTime?
-  report15m  Boolean @default(false)
-  report1h   Boolean @default(false)
-  report4h   Boolean @default(false)
-  report12h  Boolean @default(false)
-  report24h  Boolean @default(false)
+model ObserverTrade {
+  id                Int      @id @default(autoincrement())
+  whaleId           Int
+  whale             Whale    @relation(fields: [whaleId], references: [id])
+  tokenSymbol       String?
+  mintAddress       String
+  action            String
+  usdAmount         Float
+  entryPrice        Float
+  timestamp         DateTime @default(now())
+  signalReceivedAt  BigInt
+  dbWrittenAt       BigInt?
+  isLiquidityLocked Boolean?
+  peak1m            Float?
+  peak3m            Float?
+  peak5m            Float?
+  peak10m           Float?
+  peak30m           Float?
 }

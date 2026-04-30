@@ -93,3 +93,18 @@ export interface GlobalStats {
   mostActiveWhale: { name: string; tradeCount: number } | null;
   sniperOfTheDay: { name: string; tokenMint: string; timestamp: Date } | null;
 }
+
+export interface RealTimeTransactionResult {
+  signature: string;
+  slot: number;
+  meta: TransactionMeta | null;
+  transaction?: {
+    transaction?: {
+      message: {
+        accountKeys: (string | { pubkey: string })[];
+      };
+    };
+    meta?: TransactionMeta;
+  };
+}
+

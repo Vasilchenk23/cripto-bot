@@ -4,20 +4,18 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { BotModule } from './bot/bot.module';
-import { MarketModule } from './market/market.module';
-import { NewsModule } from './news/news.module';
 import { TrackingModule } from './tracking/tracking.module';
 import { ObserverModule } from './observer/observer.module';
+import { PrismaModule } from './prisma/prisma.module';
 
 @Module({
   imports: [
     ConfigModule.forRoot({ isGlobal: true }),
     ScheduleModule.forRoot(),
     BotModule,
-    MarketModule,
-    NewsModule,
     TrackingModule,
     ObserverModule,
+    PrismaModule,
   ],
   controllers: [AppController],
   providers: [AppService],

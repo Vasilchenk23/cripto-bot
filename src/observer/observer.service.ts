@@ -1,14 +1,17 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { PrismaClient } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import { WhalesService } from '../whales/whales.service';
 import axios from 'axios';
 
 @Injectable()
 export class ObserverService {
   private readonly logger = new Logger(ObserverService.name);
-  private readonly prisma = new PrismaClient();
+  // PrismaService will be injected via constructor
 
-  constructor(private readonly whalesService: WhalesService) {}
+  constructor(
+    private readonly whalesService: WhalesService,
+    private readonly prisma: PrismaService,
+  ) {}
 
   async recordTrade(params: {
     whaleId: number;

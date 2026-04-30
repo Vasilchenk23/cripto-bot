@@ -1,6 +1,13 @@
-import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleInit,
+  Inject,
+  forwardRef,
+} from '@nestjs/common';
+import { WhaleSocketService } from './whale-socket.service';
 import { ConfigService } from '@nestjs/config';
-import { PrismaClient } from '@prisma/client';
+import { PrismaService } from '../prisma/prisma.service';
 import axios, { AxiosInstance } from 'axios';
 import { Subject } from 'rxjs';
 import {
@@ -13,6 +20,7 @@ import {
   WhaleListItem,
   WhaleDetail,
   GlobalStats,
+  RealTimeTransactionResult,
 } from './whales.interfaces';
 
 const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
@@ -20,7 +28,6 @@ const BASE58_REGEX = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 @Injectable()
 export class WhalesService implements OnModuleInit {
   private readonly logger = new Logger(WhalesService.name);
-  private readonly prisma = new PrismaClient();
   private readonly http: AxiosInstance;
   private readonly rpcUrl: string;
 
@@ -30,7 +37,12 @@ export class WhalesService implements OnModuleInit {
   private static readonly MIN_TOKEN_AMOUNT = 1e-6;
   private static readonly SIGNATURE_LIMIT = 5;
 
-  constructor(private readonly configService: ConfigService) {
+  constructor(
+    private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => WhaleSocketService))
+    private readonly whaleSocketService: WhaleSocketService,
+  ) {
     const apiKey = this.configService.getOrThrow<string>('HELIUS_API_KEY');
     this.rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
     this.http = axios.create({
@@ -51,13 +63,16 @@ export class WhalesService implements OnModuleInit {
       return;
     }
 
-    const entries = raw.split(',').map((entry) => {
-      const colonIdx = entry.lastIndexOf(':');
-      if (colonIdx === -1) return null;
-      const name = entry.slice(0, colonIdx).trim();
-      const address = entry.slice(colonIdx + 1).trim();
-      return { name, address };
-    }).filter(Boolean) as { name: string; address: string }[];
+    const entries = raw
+      .split(',')
+      .map((entry) => {
+        const colonIdx = entry.lastIndexOf(':');
+        if (colonIdx === -1) return null;
+        const name = entry.slice(0, colonIdx).trim();
+        const address = entry.slice(colonIdx + 1).trim();
+        return { name, address };
+      })
+      .filter(Boolean) as { name: string; address: string }[];
 
     for (const w of entries) {
       await this.prisma.whale.upsert({
@@ -74,9 +89,11 @@ export class WhalesService implements OnModuleInit {
   }
 
   public async addWhale(address: string, name: string) {
-    return this.prisma.whale.create({
+    const whale = await this.prisma.whale.create({
       data: { address, name, isActive: true },
     });
+    this.whaleSocketService.subscribeToAddress(address);
+    return whale;
   }
 
   public async getActiveWhales(): Promise<WhaleListItem[]> {
@@ -276,22 +293,81 @@ export class WhalesService implements OnModuleInit {
     'Es9vMFrzaDCSTMd377BmsC89sXnRNVptJmCi7yFSKmJC',
   ];
 
-  private static readonly MIN_BUY_USD = 1000;
   private static readonly FAT_WHALE_USD = 5000;
 
-  public async handleRealTimeTransaction(result: any) {
+  public async handleLogNotification(signature: string) {
+    const signalReceivedAt = Date.now();
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+
+      const { data } = await this.http.post('', {
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'getTransaction',
+        params: [
+          signature,
+          {
+            commitment: 'confirmed',
+            encoding: 'jsonParsed',
+            maxSupportedTransactionVersion: 0,
+          },
+        ],
+      });
+
+      if (data.result) {
+        const tx = data.result;
+        const meta = tx.meta;
+        const slot = tx.slot;
+        const blockTime = tx.blockTime;
+
+        const transaction = tx.transaction;
+        const message = transaction?.message;
+        const accountKeys = message?.accountKeys || [];
+        const addresses = accountKeys.map((k: any) =>
+          typeof k === 'string' ? k : k.pubkey,
+        );
+
+        const whale = await this.prisma.whale.findFirst({
+          where: { address: { in: addresses }, isActive: true },
+        });
+
+        if (whale) {
+          this.logger.log(
+            `[LOG] Found transaction for ${whale.name} (${signature})`,
+          );
+          await this.analyzeTransaction(
+            { meta, slot, blockTime },
+            whale.id,
+            whale.address,
+            whale.name ?? 'Unknown',
+            signature,
+            signalReceivedAt,
+          );
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(
+        `Error fetching transaction ${signature}: ${err.message}`,
+      );
+    }
+  }
+
+  public async handleRealTimeTransaction(result: RealTimeTransactionResult) {
     const signalReceivedAt = Date.now();
     const signature = result.signature;
-    const meta = result.transaction?.meta || result.meta;
+    const tx = result.transaction;
+    const meta = tx?.meta || result.meta;
     const slot = result.slot;
-    const txData = result.transaction?.transaction || result.transaction;
+    const txData = tx?.transaction;
 
     if (!txData || !meta) return;
 
     const accountKeys = txData.message?.accountKeys || [];
     if (accountKeys.length === 0) return;
 
-    const addresses = accountKeys.map((k: any) => typeof k === 'string' ? k : k.pubkey);
+    const addresses = accountKeys.map((k) =>
+      typeof k === 'string' ? k : k.pubkey,
+    );
 
     const whale = await this.prisma.whale.findFirst({
       where: {
@@ -301,6 +377,10 @@ export class WhalesService implements OnModuleInit {
     });
 
     if (!whale) return;
+
+    this.logger.log(
+      `[TX] Received transaction from tracked whale: ${whale.name} (${signature})`,
+    );
 
     const exists = await this.prisma.whaleTx.findUnique({
       where: { signature },
@@ -358,8 +438,6 @@ export class WhalesService implements OnModuleInit {
 
       const amountUSD = absDelta * metadata.priceUsd;
 
-      if (type === 'BUY' && amountUSD < WhalesService.MIN_BUY_USD) continue;
-
       const isFatWhale = amountUSD >= WhalesService.FAT_WHALE_USD;
 
       const txRecord = await this.prisma.whaleTx.create({
@@ -416,9 +494,7 @@ export class WhalesService implements OnModuleInit {
     return alerts;
   }
 
-  public async getTokenMetadata(
-    mint: string,
-  ): Promise<{
+  public async getTokenMetadata(mint: string): Promise<{
     symbol: string;
     priceUsd: number;
     tokenAge?: string;

@@ -14,7 +14,7 @@ import { ObserverService } from '../observer/observer.service';
 export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private readonly bot: Bot;
-  private readonly CHAT_ID: string;
+  private readonly ADMIN_ID: string;
 
   constructor(
     private readonly configService: ConfigService,
@@ -22,7 +22,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     private readonly observerService: ObserverService,
   ) {
     const token = this.configService.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
-    this.CHAT_ID = this.configService.getOrThrow<string>('MY_TELEGRAM_ID');
+    this.ADMIN_ID = this.configService.getOrThrow<string>('MY_TELEGRAM_ID');
     this.bot = new Bot(token);
   }
 
@@ -50,6 +50,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.bot.command('addwhale', async (ctx) => {
+      if (ctx.from?.id.toString() !== this.ADMIN_ID) {
+        return ctx.reply('❌ Access denied.');
+      }
       if (!ctx.message?.text) return;
       const parts = ctx.message.text.split(' ');
       const address = parts[1];
@@ -77,6 +80,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.bot.command('manage', async (ctx) => {
+      if (ctx.from?.id.toString() !== this.ADMIN_ID) {
+        return ctx.reply('❌ Access denied.');
+      }
       await this.sendWhaleList(ctx);
     });
 
@@ -87,6 +93,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
 
   private registerWhaleCallbacks() {
     this.bot.callbackQuery(/whale_detail_(\d+)/, async (ctx) => {
+      if (ctx.from?.id.toString() !== this.ADMIN_ID) {
+        return ctx.answerCallbackQuery({ text: '❌ Access denied.', show_alert: true });
+      }
       await ctx.answerCallbackQuery().catch(() => {});
       const whaleId = parseInt(ctx.match[1], 10);
       const detail = await this.whalesService.getWhaleDetail(whaleId);
@@ -127,6 +136,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.bot.callbackQuery(/whale_delete_(\d+)/, async (ctx) => {
+      if (ctx.from?.id.toString() !== this.ADMIN_ID) {
+        return ctx.answerCallbackQuery({ text: '❌ Access denied.', show_alert: true });
+      }
       await ctx.answerCallbackQuery().catch(() => {});
       const whaleId = parseInt(ctx.match[1], 10);
       const deleted = await this.whalesService.deleteWhale(whaleId);
@@ -139,6 +151,9 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     });
 
     this.bot.callbackQuery('whale_list', async (ctx) => {
+      if (ctx.from?.id.toString() !== this.ADMIN_ID) {
+        return ctx.answerCallbackQuery({ text: '❌ Access denied.', show_alert: true });
+      }
       await ctx.answerCallbackQuery().catch(() => {});
       await this.sendWhaleList(ctx);
     });
@@ -165,7 +180,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         const amount = alert.amountUSD?.toFixed(0) || '?';
         const text = `🐋 ENTRY: ${alert.whaleName} -> ${symbol} на $${amount}`;
 
-        await this.bot.api.sendMessage(this.CHAT_ID, text).catch((err) => {
+        await this.bot.api.sendMessage(this.ADMIN_ID, text).catch((err) => {
           this.logger.error(`[TG] Failed to send entry alert: ${err.message}`);
         });
       }
@@ -175,7 +190,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async handleGetDump(ctx: any) {
-    if (ctx.from?.id?.toString() !== this.CHAT_ID) {
+    if (ctx.from?.id?.toString() !== this.ADMIN_ID) {
       return ctx.reply('❌ Access denied.');
     }
 

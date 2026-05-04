@@ -15,6 +15,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(BotService.name);
   private readonly bot: Bot;
   private readonly ADMIN_ID: string;
+  private readonly MIN_ALERT_USD: number;
 
   constructor(
     private readonly configService: ConfigService,
@@ -23,6 +24,7 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
   ) {
     const token = this.configService.getOrThrow<string>('TELEGRAM_BOT_TOKEN');
     this.ADMIN_ID = this.configService.getOrThrow<string>('MY_TELEGRAM_ID');
+    this.MIN_ALERT_USD = parseInt(this.configService.get<string>('MIN_ALERT_USD', '1000'), 10);
     this.bot = new Bot(token);
   }
 
@@ -173,9 +175,10 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
         usdAmount: alert.amountUSD || 0,
         entryPrice: alert.amountUSD && alert.amount ? alert.amountUSD / alert.amount : 0,
         signalReceivedAt: alert.signalReceivedAt,
+        signature: alert.signature,
       });
 
-      if (alert.type === 'BUY') {
+      if (alert.type === 'BUY' && (alert.amountUSD || 0) >= this.MIN_ALERT_USD) {
         const symbol = alert.tokenSymbol || alert.tokenMint.slice(0, 8);
         const amount = alert.amountUSD?.toFixed(0) || '?';
         const text = `🐋 ENTRY: ${alert.whaleName} -> ${symbol} на $${amount}`;
@@ -195,17 +198,53 @@ export class BotService implements OnModuleInit, OnModuleDestroy {
     }
 
     try {
-      const trades = await this.observerService.getAllTrades();
+      const days = 7;
+      const trades = await this.observerService.getAllTrades(days);
+      
+      if (trades.length === 0) {
+        return ctx.reply(`📊 No trades found in the last ${days} days.`);
+      }
+
       const dump = JSON.stringify(trades, null, 2);
-      const buffer = Buffer.from(dump, 'utf-8');
+      const jsonBuffer = Buffer.from(dump, 'utf-8');
+
+      const csvData = await this.observerService.generateDumpCsv(days);
+      const csvBuffer = Buffer.from(csvData, 'utf-8');
+
+      const totalBuys = trades.filter(t => t.action === 'BUY').length;
+      const totalVolume = trades.reduce((sum, t) => sum + t.usdAmount, 0);
+      const topWhale = [...new Set(trades.map(t => t.whale.name))]
+        .map(name => ({ name, count: trades.filter(t => t.whale.name === name).length }))
+        .sort((a, b) => b.count - a.count)[0];
+
+      const summary = [
+        '📊 <b>Whale Analysis Report</b>',
+        '━━━━━━━━━━━━━━━',
+        `📅 Period: Last ${days} days`,
+        `📈 Total Records: <b>${trades.length}</b>`,
+        `💰 Total Volume: <b>$${totalVolume.toFixed(0)}</b>`,
+        `🟢 Buys: <b>${totalBuys}</b> | 🔴 Sells: <b>${trades.length - totalBuys}</b>`,
+        `👑 Most Active: <b>${topWhale?.name || 'N/A'}</b>`,
+        `🔔 Alert Threshold: <b>>$${this.MIN_ALERT_USD}</b>`,
+        '',
+        '💡 <i>CSV file is optimized for AI analysis and Excel.</i>'
+      ].join('\n');
+
+      await ctx.reply(summary, { parse_mode: 'HTML' });
 
       await ctx.replyWithDocument(
-        new InputFile(buffer, 'whale_analysis.json'),
-        { caption: `📊 Database dump: ${trades.length} records` },
+        new InputFile(csvBuffer, `whale_analysis_${days}d.csv`),
+        { caption: '📄 CSV Export (Best for AI Analysis)' }
       );
+
+      await ctx.replyWithDocument(
+        new InputFile(jsonBuffer, `whale_analysis_${days}d.json`),
+        { caption: '📄 JSON Export (Full Data)' }
+      );
+
     } catch (error: any) {
       this.logger.error(`[DUMP] Error generating dump: ${error.message}`);
-      await ctx.reply('❌ Error generating dump.');
+      await ctx.reply('❌ Error generating dump. Check logs.');
     }
   }
 

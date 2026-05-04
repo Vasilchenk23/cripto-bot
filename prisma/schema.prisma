@@ -55,6 +55,7 @@ model ObserverTrade {
   action            String
   usdAmount         Float
   entryPrice        Float
+  signature         String?
   timestamp         DateTime @default(now())
   signalReceivedAt  BigInt
   dbWrittenAt       BigInt?

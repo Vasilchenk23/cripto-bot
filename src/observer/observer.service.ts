@@ -6,7 +6,6 @@ import axios from 'axios';
 @Injectable()
 export class ObserverService {
   private readonly logger = new Logger(ObserverService.name);
-  // PrismaService will be injected via constructor
 
   constructor(
     private readonly whalesService: WhalesService,
@@ -21,6 +20,7 @@ export class ObserverService {
     usdAmount: number;
     entryPrice: number;
     signalReceivedAt: number;
+    signature?: string;
   }) {
     const dbWrittenAt = Date.now();
 
@@ -32,6 +32,7 @@ export class ObserverService {
         action: params.action,
         usdAmount: params.usdAmount,
         entryPrice: params.entryPrice,
+        signature: params.signature || null,
         signalReceivedAt: BigInt(params.signalReceivedAt),
         dbWrittenAt: BigInt(dbWrittenAt),
       },
@@ -151,8 +152,10 @@ export class ObserverService {
     }
   }
 
-  async getAllTrades() {
+  async getAllTrades(days: number = 30) {
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000);
     const trades = await this.prisma.observerTrade.findMany({
+      where: { timestamp: { gte: since } },
       include: { whale: { select: { name: true, address: true } } },
       orderBy: { timestamp: 'desc' },
     });
@@ -165,5 +168,48 @@ export class ObserverService {
         ? Number(t.dbWrittenAt) - Number(t.signalReceivedAt)
         : null,
     }));
+  }
+
+  async generateDumpCsv(days: number = 7): Promise<string> {
+    const trades = await this.getAllTrades(days);
+    if (trades.length === 0) return '';
+
+    const headers = [
+      'Time (UTC)',
+      'Whale Name',
+      'Whale Address',
+      'Action',
+      'Token',
+      'Mint Address',
+      'Amount ($)',
+      'Entry Price',
+      '1m Peak (%)',
+      '5m Peak (%)',
+      '30m Peak (%)',
+      'Liquidity Locked',
+      'Latency (ms)',
+      'Signature',
+    ];
+
+    const rows = trades.map((t) => {
+      return [
+        t.timestamp.toISOString(),
+        t.whale.name || 'Unknown',
+        t.whale.address,
+        t.action,
+        t.tokenSymbol || '?',
+        t.mintAddress,
+        t.usdAmount.toFixed(2),
+        t.entryPrice.toFixed(8),
+        t.peak1m?.toFixed(2) ?? '',
+        t.peak5m?.toFixed(2) ?? '',
+        t.peak30m?.toFixed(2) ?? '',
+        t.isLiquidityLocked !== null ? (t.isLiquidityLocked ? 'YES' : 'NO') : '?',
+        t.latencyMs ?? '',
+        t.signature || '',
+      ].join(',');
+    });
+
+    return [headers.join(','), ...rows].join('\n');
   }
 }

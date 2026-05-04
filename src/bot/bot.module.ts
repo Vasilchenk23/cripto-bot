@@ -1,10 +1,10 @@
 import { Module } from '@nestjs/common';
 import { BotService } from './bot.service';
 import { WhalesModule } from '../whales/whales.module';
-import { ObserverModule } from '../observer/observer.module';
+import { TradingModule } from '../trading/trading.module';
 
 @Module({
-  imports: [WhalesModule, ObserverModule],
+  imports: [WhalesModule, TradingModule],
   providers: [BotService],
 })
 export class BotModule {}

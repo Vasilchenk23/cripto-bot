@@ -7,62 +7,28 @@ datasource db {
   url = env("DATABASE_URL")
 }
 
-model Airdrop {
-  id          Int      @id @default(autoincrement())
-  name        String
-  description String?
-  link        String?
-  status      String   @default("NEW")
-  createdAt   DateTime @default(now())
-}
-
-model Note {
-  id        Int      @id @default(autoincrement())
-  text      String
-  link      String?
-  createdAt DateTime @default(now())
-}
-
 model Whale {
-  id             Int             @id @default(autoincrement())
-  address        String          @unique
-  name           String?
-  isActive       Boolean         @default(true)
-  createdAt      DateTime        @default(now())
-  transactions   WhaleTx[]
-  observerTrades ObserverTrade[]
+  id       Int     @id @default(autoincrement())
+  address  String  @unique
+  name     String?
+  isActive Boolean @default(true)
+  trades   Trade[]
 }
 
-model WhaleTx {
-  id        Int      @id @default(autoincrement())
-  signature String   @unique
-  tokenMint String
-  amount    Float
-  amountUSD Float?
-  priceAtTx Float?
-  type      String
-  timestamp DateTime @default(now())
-  whaleId   Int?
-  whale     Whale?   @relation(fields: [whaleId], references: [id])
+model Account {
+  id             Int   @id @default(0)
+  virtualBalance Float @default(100.0)
 }
 
-model ObserverTrade {
-  id                Int      @id @default(autoincrement())
-  whaleId           Int
-  whale             Whale    @relation(fields: [whaleId], references: [id])
-  tokenSymbol       String?
-  mintAddress       String
-  action            String
-  usdAmount         Float
-  entryPrice        Float
-  signature         String?
-  timestamp         DateTime @default(now())
-  signalReceivedAt  BigInt
-  dbWrittenAt       BigInt?
-  isLiquidityLocked Boolean?
-  peak1m            Float?
-  peak3m            Float?
-  peak5m            Float?
-  peak10m           Float?
-  peak30m           Float?
+model Trade {
+  id          Int      @id @default(autoincrement())
+  tokenMint   String
+  tokenSymbol String?
+  side        String   // 'BUY' | 'SELL'
+  priceUsd    Float
+  amountUsd   Float
+  isBot       Boolean  // true = virtual trade, false = whale move
+  timestamp   DateTime @default(now())
+  whaleId     Int?
+  whale       Whale?   @relation(fields: [whaleId], references: [id])
 }

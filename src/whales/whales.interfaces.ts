@@ -37,14 +37,28 @@ export interface TokenBalance {
 export interface TransactionMeta {
   err: Record<string, unknown> | null;
   fee: number;
+  preBalances: number[];   // native SOL in lamports, indexed by accountKeys
+  postBalances: number[];
   preTokenBalances: TokenBalance[];
   postTokenBalances: TokenBalance[];
+  logMessages?: string[];
+}
+
+export interface AccountKey {
+  pubkey: string;
+  signer?: boolean;
+  writable?: boolean;
 }
 
 export interface TransactionResult {
   slot: number;
   meta: TransactionMeta | null;
   blockTime: number | null;
+  transaction?: {
+    message: {
+      accountKeys: (string | AccountKey)[];
+    };
+  };
 }
 
 export interface WhaleAlert {

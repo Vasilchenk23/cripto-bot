@@ -4,14 +4,18 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-  url = env("DATABASE_URL")
+  url      = env("DATABASE_URL")
 }
 
 model Whale {
-  id       Int     @id @default(autoincrement())
-  address  String  @unique
+  id       Int       @id @default(autoincrement())
+  address  String    @unique
   name     String?
-  isActive Boolean @default(true)
+  isActive Boolean   @default(true)
+  source   String?   // 'manual' | 'pump.fun' | 'birdeye'
+  pnl24h   Float?
+  winRate  Float?
+  lastSeen DateTime?
   trades   Trade[]
 }
 
@@ -26,9 +30,10 @@ model Trade {
   tokenSymbol String?
   side        String   // 'BUY' | 'SELL'
   priceUsd    Float
-  amountUsd   Float
-  isBot       Boolean  // true = virtual trade, false = whale move
+  amountUsd   Float    // original cost basis (not sale proceeds)
+  isBot       Boolean
   timestamp   DateTime @default(now())
   whaleId     Int?
   whale       Whale?   @relation(fields: [whaleId], references: [id])
+  signature   String?  @unique
 }

@@ -105,14 +105,14 @@ export class WhalesService implements OnModuleInit {
     const sig8 = signature.slice(0, 8);
     const addr8 = whaleAddress.slice(0, 8);
 
-    // With processed commitment tx is available almost immediately
+    // Fresh txs can take 1-3s to be indexed — retry up to 6 times
     let tx: TransactionResult | null = null;
-    for (let attempt = 0; attempt < 3; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 400));
+    for (let attempt = 0; attempt < 6; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 500));
       try {
         tx = await this.rpcCall<TransactionResult>('getTransaction', [
           signature,
-          { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'processed' },
+          { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' },
         ]);
         if (tx?.meta) break;
         this.logger.debug(`[${sig8}] Tx not indexed yet (attempt ${attempt + 1})`);

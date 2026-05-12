@@ -122,7 +122,7 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
         jsonrpc: '2.0',
         id: address,
         method: 'logsSubscribe',
-        params: [{ mentions: [address] }, { commitment: 'processed' }],
+        params: [{ mentions: [address] }, { commitment: 'confirmed' }],
       }));
       this.logger.log(`[WS] Subscribing to ${address.slice(0, 8)}...`);
     }

@@ -46,6 +46,10 @@ export class WhalesService implements OnModuleInit {
   private solPriceUsd = 150;
   private lastSolPriceMs = 0;
 
+  // Token metadata cache — avoids DexScreener call on every repeated swap
+  private readonly tokenMetaCache = new Map<string, { symbol: string; priceUsd: number; cachedAt: number }>();
+  private static readonly TOKEN_CACHE_TTL_MS = 10_000;
+
   constructor(
     private readonly configService: ConfigService,
     private readonly prisma: PrismaService,
@@ -101,14 +105,14 @@ export class WhalesService implements OnModuleInit {
     const sig8 = signature.slice(0, 8);
     const addr8 = whaleAddress.slice(0, 8);
 
-    // Fresh txs can take 1-3s to be indexed — retry up to 4 times
+    // With processed commitment tx is available almost immediately
     let tx: TransactionResult | null = null;
-    for (let attempt = 0; attempt < 4; attempt++) {
-      if (attempt > 0) await new Promise((r) => setTimeout(r, 1200 * attempt));
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, 400));
       try {
         tx = await this.rpcCall<TransactionResult>('getTransaction', [
           signature,
-          { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'confirmed' },
+          { encoding: 'jsonParsed', maxSupportedTransactionVersion: 0, commitment: 'processed' },
         ]);
         if (tx?.meta) break;
         this.logger.debug(`[${sig8}] Tx not indexed yet (attempt ${attempt + 1})`);
@@ -277,6 +281,13 @@ export class WhalesService implements OnModuleInit {
     symbol: string;
     priceUsd: number;
   } | null> {
+    const cached = this.tokenMetaCache.get(mint);
+    if (cached && Date.now() - cached.cachedAt < WhalesService.TOKEN_CACHE_TTL_MS) {
+      return { symbol: cached.symbol, priceUsd: cached.priceUsd };
+    }
+
+    let result: { symbol: string; priceUsd: number } | null = null;
+
     // DexScreener
     try {
       const { data } = await axios.get(
@@ -287,7 +298,7 @@ export class WhalesService implements OnModuleInit {
         const pair = data.pairs[0];
         const price = parseFloat(pair.priceUsd);
         if (price > 0) {
-          return { symbol: pair.baseToken.symbol as string, priceUsd: price };
+          result = { symbol: pair.baseToken.symbol as string, priceUsd: price };
         }
       }
     } catch {
@@ -295,21 +306,26 @@ export class WhalesService implements OnModuleInit {
     }
 
     // Jupiter price API
-    try {
-      const { data: jupData } = await axios.get(
-        `https://api.jup.ag/price/v2?ids=${mint}`,
-        { timeout: 5_000 },
-      );
-      const entry = jupData?.data?.[mint];
-      if (entry) {
-        const price = parseFloat(entry.price as string);
-        if (price > 0) return { symbol: 'UNKNOWN', priceUsd: price };
+    if (!result) {
+      try {
+        const { data: jupData } = await axios.get(
+          `https://api.jup.ag/price/v2?ids=${mint}`,
+          { timeout: 5_000 },
+        );
+        const entry = jupData?.data?.[mint];
+        if (entry) {
+          const price = parseFloat(entry.price as string);
+          if (price > 0) result = { symbol: 'UNKNOWN', priceUsd: price };
+        }
+      } catch {
+        // ignore
       }
-    } catch {
-      // ignore
     }
 
-    return null;
+    if (result) {
+      this.tokenMetaCache.set(mint, { ...result, cachedAt: Date.now() });
+    }
+    return result;
   }
 
   // ─── RPC helper ───────────────────────────────────────────────────────────

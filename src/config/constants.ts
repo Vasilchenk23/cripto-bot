@@ -1,4 +1,3 @@
-export const TARGET_WHALE_ADDRESS = 'EmDewJpfQaxWqxthX1FUyBCCPNGt8Ac5ek4M4pnGTgxC';
 export const START_BALANCE      = 200.0;
 export const TRADE_SIZE         = 10.0;
 export const TP_1               = 1.20;   // sell 50% at +20%
@@ -9,7 +8,7 @@ export const MAX_OPEN_POSITIONS = 5;
 export const SOL_PRICE_REFRESH_MS = 30_000;
 export const MIN_WHALE_PNL_24H  = 300;    // $ minimum daily PnL to track
 export const MIN_WHALE_TRADES   = 3;      // minimum trades in discovery window
-export const MAX_TRACKED_WHALES = 30;
+export const MAX_TRACKED_WHALES = 8;
 
 // Known Solana DEX / AMM program IDs — used for early swap filter
 export const DEX_PROGRAM_IDS = new Set([

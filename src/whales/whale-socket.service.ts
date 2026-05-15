@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 import { WhalesService } from './whales.service';
 import { VirtualTraderService } from '../trading/virtual-trader.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEX_PROGRAM_IDS, TARGET_WHALE_ADDRESS } from '../config/constants';
+import { DEX_PROGRAM_IDS } from '../config/constants';
 
 type LogsNotificationParams = {
   subscription: number;
@@ -33,7 +33,7 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
   private isClosing = false;
 
   // In-memory address list — no DB reads needed
-  private trackedAddresses: string[] = [TARGET_WHALE_ADDRESS];
+  private trackedAddresses: string[] = [];
   private subIdToAddress = new Map<number, string>();
   private pendingAddresses = new Set<string>();
 
@@ -66,7 +66,7 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
 
   // Called by WhaleDiscoveryService after fetch+filter
   public updateTrackedAddresses(addresses: string[]) {
-    this.trackedAddresses = [...new Set([TARGET_WHALE_ADDRESS, ...addresses])];
+    this.trackedAddresses = [...new Set(addresses)];
     this.logger.log(`[WS] Tracking ${this.trackedAddresses.length} addresses`);
 
     if (this.ws?.readyState === WebSocket.OPEN) {

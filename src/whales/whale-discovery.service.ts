@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { Cron } from '@nestjs/schedule';
 import { ConfigService } from '@nestjs/config';
 import { WhaleSocketService } from './whale-socket.service';
+import { NotificationService } from '../notification/notification.service';
 import {
   MIN_WHALE_PNL_24H,
   MIN_WHALE_TRADES,
@@ -24,6 +25,7 @@ export class WhaleDiscoveryService implements OnModuleInit {
   constructor(
     private readonly configService: ConfigService,
     private readonly whaleSocket: WhaleSocketService,
+    private readonly notification: NotificationService,
   ) {
     this.birdeyeKey = this.configService.get<string>('BIRDEYE_API_KEY') ?? null;
   }
@@ -41,8 +43,24 @@ export class WhaleDiscoveryService implements OnModuleInit {
 
     this.logger.log(`[DISCOVERY] ${candidates.length} raw → ${filtered.length} qualified`);
 
-    // Pass addresses directly — no DB storage
+    if (filtered.length === 0) {
+      this.logger.warn('[DISCOVERY] No qualified whales found — keeping current list');
+      return;
+    }
+
     this.whaleSocket.updateTrackedAddresses(filtered.map((c) => c.address));
+
+    const lines = filtered
+      .map((c, i) => {
+        const addr = `${c.address.slice(0, 6)}...${c.address.slice(-4)}`;
+        const pnl = c.pnl24h >= 0 ? `+$${c.pnl24h.toFixed(0)}` : `-$${Math.abs(c.pnl24h).toFixed(0)}`;
+        return `${i + 1}. <code>${addr}</code>  PnL24h: <b>${pnl}</b>`;
+      })
+      .join('\n');
+
+    void this.notification.send(
+      `🔄 <b>Киты обновлены</b> (${filtered.length} шт)\n\n${lines}`,
+    );
   }
 
   // ─── Sources ──────────────────────────────────────────────────────────────

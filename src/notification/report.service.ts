@@ -3,6 +3,14 @@ import { Cron } from '@nestjs/schedule';
 import { PrismaService } from '../prisma/prisma.service';
 import { NotificationService } from './notification.service';
 import { START_BALANCE } from '../config/constants';
+import axios from 'axios';
+
+interface OpenPosition {
+  mint: string;
+  symbol: string;
+  entryPrice: number;
+  investedUsd: number;
+}
 
 @Injectable()
 export class ReportService {
@@ -39,18 +47,14 @@ export class ReportService {
       }),
     ]);
 
-    const balance = account?.virtualBalance ?? START_BALANCE;
-    const totalPnl = balance - START_BALANCE;
-    const pnlSign = totalPnl >= 0 ? '+' : '';
-    const pnlPct = ((totalPnl / START_BALANCE) * 100).toFixed(1);
+    const freeCash = account?.virtualBalance ?? START_BALANCE;
 
     const buys = recentTrades.filter((t) => t.side === 'BUY');
     const sells = recentTrades.filter((t) => t.side === 'SELL');
 
-    // Calculate period P&L from sells: proceeds vs cost basis
+    // Period P&L from sells
     let periodPnl = 0;
     for (const sell of sells) {
-      // Find matching buy to get entry price
       const matchBuy = await this.prisma.trade.findFirst({
         where: { isBot: true, side: 'BUY', tokenMint: sell.tokenMint },
         orderBy: { timestamp: 'desc' },
@@ -61,41 +65,107 @@ export class ReportService {
       }
     }
 
-    const openCount = await this.countOpenPositions();
-    const periodSign = periodPnl >= 0 ? '+' : '';
+    const { positions } = await this.getOpenPositionsSummary();
+
+    // Fetch current prices and compute real portfolio value
+    let currentPositionValue = 0;
+    const positionLines: string[] = [];
+    for (const pos of positions) {
+      const currentPrice = await this.fetchCurrentPrice(pos.mint);
+      const currentVal = currentPrice != null
+        ? pos.investedUsd * (currentPrice / pos.entryPrice)
+        : pos.investedUsd;
+      currentPositionValue += currentVal;
+      const pnlPct = currentPrice != null
+        ? ((currentPrice / pos.entryPrice - 1) * 100).toFixed(1)
+        : '?';
+      const sign = parseFloat(pnlPct) >= 0 ? '+' : '';
+      const emoji = parseFloat(pnlPct) >= 0 ? '🟢' : '🔴';
+      positionLines.push(`  ${emoji} ${pos.symbol}: <code>${sign}${pnlPct}%</code>  ($${currentVal.toFixed(2)})`);
+    }
+
+    const totalPortfolio = freeCash + currentPositionValue;
+    const portfolioPnl = totalPortfolio - START_BALANCE;
+    const portfolioPnlSign = portfolioPnl >= 0 ? '+' : '';
+    const portfolioPnlPct = ((portfolioPnl / START_BALANCE) * 100).toFixed(1);
+    const portfolioEmoji = portfolioPnl >= 0 ? '📈' : '📉';
 
     let msg = `📊 <b>Отчёт за ${label}</b>\n\n`;
-    msg += `💰 Баланс: <code>$${balance.toFixed(2)}</code>\n`;
-    msg += `📈 P&L всего: <code>${pnlSign}$${totalPnl.toFixed(2)} (${pnlSign}${pnlPct}%)</code>\n`;
+
+    msg += `🏦 <b>ПОРТФЕЛЬ: <code>$${totalPortfolio.toFixed(2)}</code></b>\n`;
+    msg += `${portfolioEmoji} P&L: <code>${portfolioPnlSign}$${portfolioPnl.toFixed(2)} (${portfolioPnlSign}${portfolioPnlPct}%)</code>\n`;
+    msg += `\n💵 Свободно: <code>$${freeCash.toFixed(2)}</code>\n`;
+    msg += `📦 В позициях: <code>$${currentPositionValue.toFixed(2)}</code> (тек. цена)\n`;
 
     if (sells.length > 0) {
+      const periodSign = periodPnl >= 0 ? '+' : '';
       msg += `\n<b>За ${label}:</b>\n`;
       msg += `  Открыто: ${buys.length}  Закрыто: ${sells.length}\n`;
       msg += `  P&L периода: <code>${periodSign}$${periodPnl.toFixed(2)}</code>\n`;
     } else {
-      msg += `\nЗа ${label}: сделок нет\n`;
+      msg += `\nЗа ${label}: закрытых сделок нет\n`;
     }
 
-    msg += `\n⏳ Открытых позиций: <b>${openCount}</b>`;
+    if (positions.length > 0) {
+      msg += `\n⏳ <b>Открытых позиций: ${positions.length}</b>\n`;
+      msg += positionLines.join('\n');
+    } else {
+      msg += `\n⏳ Открытых позиций: <b>0</b>`;
+    }
 
     await this.notification.send(msg);
-    this.logger.log(`[REPORT] ${label} report sent`);
+    this.logger.log(`[REPORT] ${label} report sent. Portfolio=$${totalPortfolio.toFixed(2)}`);
   }
 
-  private async countOpenPositions(): Promise<number> {
+  private async fetchCurrentPrice(mint: string): Promise<number | null> {
+    try {
+      const { data } = await axios.get(
+        `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+        { timeout: 5_000 },
+      );
+      if (data.pairs?.length > 0) {
+        const price = parseFloat(data.pairs[0].priceUsd as string);
+        if (price > 0) return price;
+      }
+    } catch {}
+    try {
+      const { data } = await axios.get(
+        `https://api.jup.ag/price/v2?ids=${mint}`,
+        { timeout: 5_000 },
+      );
+      const price = parseFloat(data?.data?.[mint]?.price as string);
+      if (price > 0) return price;
+    } catch {}
+    return null;
+  }
+
+  private async getOpenPositionsSummary(): Promise<{ positions: OpenPosition[] }> {
     const trades = await this.prisma.trade.findMany({
       where: { isBot: true },
-      select: { tokenMint: true, side: true, amountUsd: true },
+      select: { tokenMint: true, side: true, amountUsd: true, tokenSymbol: true, priceUsd: true },
+      orderBy: { timestamp: 'asc' },
     });
 
-    const sums = new Map<string, { bought: number; sold: number }>();
+    const sums = new Map<string, { bought: number; sold: number; symbol: string; entryPrice: number }>();
     for (const t of trades) {
-      const s = sums.get(t.tokenMint) ?? { bought: 0, sold: 0 };
-      if (t.side === 'BUY') s.bought += t.amountUsd;
-      else s.sold += t.amountUsd;
+      const s = sums.get(t.tokenMint) ?? { bought: 0, sold: 0, symbol: t.tokenSymbol ?? '?', entryPrice: t.priceUsd };
+      if (t.side === 'BUY') {
+        s.bought += t.amountUsd;
+        s.entryPrice = t.priceUsd;
+      } else {
+        s.sold += t.amountUsd;
+      }
       sums.set(t.tokenMint, s);
     }
 
-    return [...sums.values()].filter((s) => s.bought - s.sold > 0.01).length;
+    const open = [...sums.entries()].filter(([, s]) => s.bought - s.sold > 0.01);
+    return {
+      positions: open.map(([mint, s]) => ({
+        mint,
+        symbol: s.symbol,
+        entryPrice: s.entryPrice,
+        investedUsd: s.bought - s.sold,
+      })),
+    };
   }
 }

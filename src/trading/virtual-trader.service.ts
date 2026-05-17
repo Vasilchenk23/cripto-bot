@@ -173,6 +173,21 @@ export class VirtualTraderService implements OnModuleInit {
 
   async onWhaleSell(tokenMint: string, priceUsd: number, sellPercent = 1.0) {
     if (!this.positions.has(tokenMint)) return;
+
+    // Ignore dust sells: whale sold < 5% of their position — not a real exit signal
+    if (sellPercent < 0.05) {
+      const pos = this.positions.get(tokenMint)!;
+      this.logger.debug(`[TRADE] Skip ${pos.symbol} sell — whale sold only ${(sellPercent * 100).toFixed(2)}% (dust)`);
+      return;
+    }
+
+    const pos = this.positions.get(tokenMint)!;
+    // Price sanity check: reject if price is 5x+ above entry — likely wrong price source
+    if (priceUsd > pos.entryPrice * 5) {
+      this.logger.warn(`[TRADE] Skip ${pos.symbol} sell — price anomaly ($${priceUsd.toFixed(6)} vs entry $${pos.entryPrice.toFixed(6)})`);
+      return;
+    }
+
     await this.executeSell(tokenMint, priceUsd, `Whale Sold ${(sellPercent * 100).toFixed(0)}%`, sellPercent);
   }
 

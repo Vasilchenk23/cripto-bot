@@ -200,17 +200,22 @@ export class VirtualTraderService implements OnModuleInit {
     this.slCronRunning = true;
 
     try {
-      for (const [mint, pos] of [...this.positions.entries()]) {
+      const entries = [...this.positions.entries()];
+      const mints = entries.map(([mint]) => mint);
+
+      // Fetch all prices in one batched request instead of N sequential calls
+      const prices = await this.fetchPricesBatch(mints);
+
+      for (const [mint, pos] of entries) {
         // Safety net: force-close positions stuck open too long (price feed dead)
         const heldMs = Date.now() - pos.openedAt;
         if (heldMs > MAX_HOLD_MS) {
           this.logger.warn(`[TP/SL] ${pos.symbol}: удерживается ${Math.round(heldMs / 3600000)}ч — принудительное закрытие`);
-          const price = await this.fetchPriceForSL(mint);
-          await this.executeSell(mint, price ?? pos.entryPrice * SL, 'Force Close (72h)', 1.0);
+          await this.executeSell(mint, prices.get(mint) ?? pos.entryPrice * SL, 'Force Close (72h)', 1.0);
           continue;
         }
 
-        const price = await this.fetchPriceForSL(mint);
+        const price = prices.get(mint) ?? null;
         if (price === null) {
           this.logger.warn(`[TP/SL] ${pos.symbol}: цена недоступна (Jupiter + DexScreener)`);
           continue;
@@ -240,36 +245,45 @@ export class VirtualTraderService implements OnModuleInit {
     }
   }
 
-  // Dedicated price fetch for SL/TP — separate from whale analysis cache
-  // Jupiter first (faster, no rate limit issues), DexScreener as fallback
-  private async fetchPriceForSL(mint: string): Promise<number | null> {
-    // Jupiter Price API — reliable, no strict rate limit for individual queries
-    try {
-      const { data } = await axios.get(
-        `https://api.jup.ag/price/v2?ids=${mint}`,
-        { timeout: 4_000 },
-      );
-      const price = parseFloat(data?.data?.[mint]?.price as string);
-      if (price > 0) return price;
-    } catch {
-      // fall through
-    }
+  // Batch price fetch: one Jupiter request for all mints, DexScreener per-mint only as fallback
+  private async fetchPricesBatch(mints: string[]): Promise<Map<string, number>> {
+    const result = new Map<string, number>();
+    if (mints.length === 0) return result;
 
-    // DexScreener fallback
+    // Jupiter: single request for all mints
     try {
       const { data } = await axios.get(
-        `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+        `https://api.jup.ag/price/v2?ids=${mints.join(',')}`,
         { timeout: 5_000 },
       );
-      if (data.pairs?.length > 0) {
-        const price = parseFloat(data.pairs[0].priceUsd as string);
-        if (price > 0) return price;
+      for (const mint of mints) {
+        const price = parseFloat(data?.data?.[mint]?.price as string);
+        if (price > 0) result.set(mint, price);
       }
     } catch {
-      // both failed
+      // fall through to DexScreener
     }
 
-    return null;
+    // DexScreener only for mints Jupiter didn't return
+    const missing = mints.filter((m) => !result.has(m));
+    await Promise.all(
+      missing.map(async (mint) => {
+        try {
+          const { data } = await axios.get(
+            `https://api.dexscreener.com/latest/dex/tokens/${mint}`,
+            { timeout: 5_000 },
+          );
+          if (data.pairs?.length > 0) {
+            const price = parseFloat(data.pairs[0].priceUsd as string);
+            if (price > 0) result.set(mint, price);
+          }
+        } catch {
+          // price stays missing
+        }
+      }),
+    );
+
+    return result;
   }
 
   // ─── Core sell logic ──────────────────────────────────────────────────────

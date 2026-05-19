@@ -1,10 +1,11 @@
 export const START_BALANCE      = 200.0;
 export const TRADE_SIZE         = 10.0;
-export const TP_1               = 1.20;   // sell 50% at +20%
-export const TP_FINAL           = 1.50;   // sell rest at +50%
-export const SL                 = 0.90;   // cut at -10%
+export const TP_1               = 1.10;   // sell 50% at +10%
+export const TP_FINAL           = 1.25;   // sell rest at +25%
+export const SL                 = 0.94;   // cut at -6%
 export const SLIPPAGE_PENALTY   = 1.015;  // bot enters 1.5% above whale price
 export const MAX_OPEN_POSITIONS = 5;
+export const MIN_WHALE_TRADE_USD = 5.0;   // ignore whale buys smaller than $5
 export const SOL_PRICE_REFRESH_MS = 30_000;
 export const MIN_WHALE_PNL_24H  = 300;    // $ minimum daily PnL to track
 export const MIN_WHALE_TRADES   = 3;      // minimum trades in discovery window

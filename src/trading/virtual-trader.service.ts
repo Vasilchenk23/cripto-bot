@@ -232,12 +232,12 @@ export class VirtualTraderService implements OnModuleInit {
 
         if (!pos.soldHalf && price >= pos.entryPrice * TP_1) {
           pos.soldHalf = true;
-          await this.executeSell(mint, price, 'TP1 +20%', 0.5);
+          await this.executeSell(mint, price, 'TP1 +10%', 0.5);
           continue;
         }
 
         if (pos.soldHalf && price >= pos.entryPrice * TP_FINAL) {
-          await this.executeSell(mint, price, 'TP2 +50%', 1.0);
+          await this.executeSell(mint, price, 'TP2 +25%', 1.0);
         }
       }
     } finally {

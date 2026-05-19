@@ -11,7 +11,7 @@ import WebSocket from 'ws';
 import { WhalesService } from './whales.service';
 import { VirtualTraderService } from '../trading/virtual-trader.service';
 import { PrismaService } from '../prisma/prisma.service';
-import { DEX_PROGRAM_IDS } from '../config/constants';
+import { DEX_PROGRAM_IDS, MIN_WHALE_TRADE_USD } from '../config/constants';
 
 type LogsNotificationParams = {
   subscription: number;
@@ -210,7 +210,11 @@ export class WhaleSocketService implements OnModuleInit, OnModuleDestroy {
       }
 
       if (info.side === 'BUY') {
-        await this.virtualTrader.onWhaleBuy(info.mint, info.symbol, info.priceUsd);
+        if (info.amountUsd < MIN_WHALE_TRADE_USD) {
+          this.logger.debug(`[WS] Skip ${info.symbol} buy — whale vol $${info.amountUsd.toFixed(2)} < $${MIN_WHALE_TRADE_USD}`);
+        } else {
+          await this.virtualTrader.onWhaleBuy(info.mint, info.symbol, info.priceUsd);
+        }
       } else if (info.side === 'SELL') {
         await this.virtualTrader.onWhaleSell(info.mint, info.priceUsd, info.sellPercent);
       }
